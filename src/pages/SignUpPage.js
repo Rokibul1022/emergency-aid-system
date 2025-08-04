@@ -67,8 +67,16 @@ const SignUpPage = () => {
       newErrors.confirmPassword = 'Passwords do not match';
     }
 
-    if (formData.phone && !/^[+]?[1-9][\d]{0,15}$/.test(formData.phone.replace(/\s/g, ''))) {
-      newErrors.phone = 'Phone number is invalid';
+    if (formData.phone) {
+      const cleanPhone = formData.phone.replace(/\s/g, '');
+      // Bangladeshi phone number validation: 11 digits starting with 01[3-9]
+      const bangladeshiPhoneRegex = /^01[3-9]\d{8}$/;
+      // Also allow international format with +880
+      const internationalRegex = /^\+8801[3-9]\d{8}$/;
+      
+      if (!bangladeshiPhoneRegex.test(cleanPhone) && !internationalRegex.test(cleanPhone)) {
+        newErrors.phone = 'Please enter a valid Bangladeshi phone number (e.g., 01712345678 or +8801712345678)';
+      }
     }
 
     setErrors(newErrors);
