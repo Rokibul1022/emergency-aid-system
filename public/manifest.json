@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "Emergency Aid",
+  "name": "Emergency Aid Request & Response System",
+  "description": "A comprehensive emergency aid platform for requesting and providing assistance during disasters",
   "icons": [
     {
       "src": "favicon.ico",
@@ -21,5 +22,25 @@
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "background_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["emergency", "health", "social"],
+  "shortcuts": [
+    {
+      "name": "Request Help",
+      "short_name": "Request",
+      "description": "Submit an emergency aid request",
+      "url": "/request",
+      "icons": [{ "src": "logo192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Panic Button",
+      "short_name": "Panic",
+      "description": "Emergency panic button",
+      "url": "/panic",
+      "icons": [{ "src": "logo192.png", "sizes": "192x192" }]
+    }
+  ]
 }

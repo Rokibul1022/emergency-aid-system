@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection - Allow users to create and read their own document
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && isOwner(userId);
+      allow read: if isAuthenticated(); // Allow reading other users for admin purposes
+      allow create: if isAuthenticated(); // Allow creating user documents
+    }
+    
+    // Helper functions that can be used after user document exists
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+    
+    function isVolunteer() {
+      return isAuthenticated() && getUserRole() == 'volunteer';
+    }
+    
+    function isRequester() {
+      return isAuthenticated() && getUserRole() == 'requester';
+    }
+    
+    // Requests collection - Very permissive for development
+    match /requests/{requestId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Shelters collection
+    match /shelters/{shelterId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // Donations collection
+    match /donations/{donationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+    
+    // Resources collection
+    match /resources/{resourceId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // Geo zones collection
+    match /geo_zones/{zoneId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // Panic Alerts collection
+    match /panic_alerts/{alertId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+} 
