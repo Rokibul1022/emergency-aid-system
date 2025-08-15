@@ -1,13 +1,21 @@
 {
   "rules": {
     "messages": {
-      "$chatId": {
-        ".read": "auth != null",
-        ".write": "auth != null",
+      "$requestId": {
+        ".indexOn": ["timestamp"],
         "$messageId": {
-          ".validate": "newData.hasChildren(['senderId', 'text', 'timestamp']) && newData.child('senderId').val() == auth.uid"
+          ".read": "auth != null",
+          ".write": "auth != null && newData.child('senderId').val() == auth.uid",
+          ".validate": "newData.hasChildren(['senderId','text','timestamp'])"
         }
+      }
+    },
+    "onlineUsers": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "auth != null && $userId == auth.uid",
+        ".validate": "newData.child('status').val() == 'online' || (!newData.exists())"
       }
     }
   }
-} 
+}

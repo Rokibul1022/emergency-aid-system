@@ -6,14 +6,19 @@ import {
   serverTimestamp,
   query,
   orderByChild,
-  limitToLast
+  limitToLast,
+  set,
+  remove,
+  onDisconnect,
+  update
 } from 'firebase/database';
 import { realtimeDb } from './config';
 
 // Send a message to a specific request chat
 export const sendMessage = async (requestId, messageData) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}/messages`);
+    // Match existing Realtime DB rules: /messages/{requestId}/{messageId}
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
     const message = {
       ...messageData,
       timestamp: serverTimestamp(),
@@ -31,7 +36,7 @@ export const sendMessage = async (requestId, messageData) => {
 // Subscribe to chat messages for a specific request
 export const subscribeToChat = (requestId, callback) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}/messages`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
     const chatQuery = query(chatRef, orderByChild('timestamp'), limitToLast(50));
     
     const unsubscribe = onValue(chatQuery, (snapshot) => {
@@ -62,7 +67,7 @@ export const subscribeToChat = (requestId, callback) => {
 // Get chat messages for a specific request (one-time fetch)
 export const getChatMessages = async (requestId) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}/messages`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
     const chatQuery = query(chatRef, orderByChild('timestamp'), limitToLast(50));
     
     return new Promise((resolve, reject) => {
@@ -95,7 +100,7 @@ export const getChatMessages = async (requestId) => {
 // Mark messages as read for a user
 export const markMessagesAsRead = async (requestId, userId) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}/readStatus`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}/readStatus`);
     await push(chatRef, {
       userId,
       timestamp: serverTimestamp()
@@ -110,8 +115,8 @@ export const markMessagesAsRead = async (requestId, userId) => {
 // Get unread message count for a user
 export const getUnreadMessageCount = (requestId, userId, callback) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}/messages`);
-    const readRef = ref(realtimeDb, `chats/${requestId}/readStatus`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
+    const readRef = ref(realtimeDb, `messages/${requestId}/readStatus`);
     
     let lastReadTimestamp = 0;
     let totalMessages = 0;
@@ -155,10 +160,10 @@ export const getUnreadMessageCount = (requestId, userId, callback) => {
 // Create a new chat room for a request
 export const createChatRoom = async (requestId, initialMessage = null) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
     
     if (initialMessage) {
-      const messagesRef = ref(realtimeDb, `chats/${requestId}/messages`);
+      const messagesRef = ref(realtimeDb, `messages/${requestId}`);
       await push(messagesRef, {
         ...initialMessage,
         timestamp: serverTimestamp(),
@@ -176,7 +181,7 @@ export const createChatRoom = async (requestId, initialMessage = null) => {
 // Delete a chat room (admin function)
 export const deleteChatRoom = async (requestId) => {
   try {
-    const chatRef = ref(realtimeDb, `chats/${requestId}`);
+    const chatRef = ref(realtimeDb, `messages/${requestId}`);
     // Note: In a real implementation, you'd need to use remove() from Firebase
     // For now, we'll just return success
     return true;
@@ -189,7 +194,7 @@ export const deleteChatRoom = async (requestId) => {
 // Get all active chats for a user
 export const getUserChats = (userId, callback) => {
   try {
-    const chatsRef = ref(realtimeDb, 'chats');
+    const chatsRef = ref(realtimeDb, 'messages');
     
     const unsubscribe = onValue(chatsRef, (snapshot) => {
       const userChats = [];
@@ -198,18 +203,16 @@ export const getUserChats = (userId, callback) => {
           const chatId = chatSnapshot.key;
           const messages = [];
           
-          if (chatSnapshot.child('messages').exists()) {
-            chatSnapshot.child('messages').forEach((messageSnapshot) => {
-              const messageData = messageSnapshot.val();
-              if (messageData.senderId === userId || messageData.senderRole === 'requester') {
-                messages.push({
-                  id: messageSnapshot.key,
-                  ...messageData,
-                  timestamp: messageData.timestamp ? new Date(messageData.timestamp) : new Date()
-                });
-              }
-            });
-          }
+          chatSnapshot.forEach((messageSnapshot) => {
+            const messageData = messageSnapshot.val();
+            if (messageData && (messageData.senderId === userId || messageData.senderRole === 'requester')) {
+              messages.push({
+                id: messageSnapshot.key,
+                ...messageData,
+                timestamp: messageData.timestamp ? new Date(messageData.timestamp) : new Date()
+              });
+            }
+          });
           
           if (messages.length > 0) {
             // Sort messages by timestamp and get the latest
@@ -237,6 +240,74 @@ export const getUserChats = (userId, callback) => {
   }
 };
 
+// Online status management
+export const setUserOnline = async (userId, userData) => {
+  try {
+    const onlineRef = ref(realtimeDb, `onlineUsers/${userId}`);
+    // Ensure the entry is removed when the client disconnects unexpectedly
+    try {
+      onDisconnect(onlineRef).remove();
+    } catch (_) {}
+    await set(onlineRef, {
+      status: 'online',
+      lastSeen: serverTimestamp(),
+      displayName: userData?.displayName || userData?.email || 'User',
+      role: userData?.role || 'requester'
+    });
+    return true;
+  } catch (error) {
+    console.error('Error setting user online:', error);
+    throw error;
+  }
+};
+
+export const setUserOffline = async (userId) => {
+  try {
+    const onlineRef = ref(realtimeDb, `onlineUsers/${userId}`);
+    await remove(onlineRef);
+    return true;
+  } catch (error) {
+    console.error('Error setting user offline:', error);
+    throw error;
+  }
+};
+
+export const updateUserLastSeen = async (userId) => {
+  try {
+    const onlineRef = ref(realtimeDb, `onlineUsers/${userId}`);
+    await update(onlineRef, { lastSeen: serverTimestamp(), status: 'online' });
+    return true;
+  } catch (error) {
+    console.error('Error updating last seen:', error);
+    throw error;
+  }
+};
+
+export const subscribeToOnlineUsers = (callback) => {
+  try {
+    const onlineRef = ref(realtimeDb, 'onlineUsers');
+    
+    const unsubscribe = onValue(onlineRef, (snapshot) => {
+      const onlineUsers = [];
+      if (snapshot.exists()) {
+        snapshot.forEach((childSnapshot) => {
+          const userData = childSnapshot.val();
+          onlineUsers.push({
+            userId: childSnapshot.key,
+            ...userData
+          });
+        });
+      }
+      callback(onlineUsers);
+    });
+    
+    return unsubscribe;
+  } catch (error) {
+    console.error('Error subscribing to online users:', error);
+    throw error;
+  }
+};
+
 const chatService = {
   sendMessage,
   subscribeToChat,
@@ -245,7 +316,11 @@ const chatService = {
   getUnreadMessageCount,
   createChatRoom,
   deleteChatRoom,
-  getUserChats
+  getUserChats,
+  setUserOnline,
+  setUserOffline,
+  updateUserLastSeen,
+  subscribeToOnlineUsers
 };
 
 export default chatService; 
