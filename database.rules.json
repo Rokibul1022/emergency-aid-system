@@ -2,20 +2,20 @@
   "rules": {
     "messages": {
       "$requestId": {
-        ".indexOn": ["timestamp"],
         "$messageId": {
           ".read": "auth != null",
           ".write": "auth != null && newData.child('senderId').val() == auth.uid",
           ".validate": "newData.hasChildren(['senderId','text','timestamp'])"
-        }
+        },
+        ".indexOn": ["timestamp"]
       }
     },
     "onlineUsers": {
       "$userId": {
         ".read": "auth != null",
-        ".write": "auth != null && $userId == auth.uid",
-        ".validate": "newData.child('status').val() == 'online' || (!newData.exists())"
+        ".write": "auth != null && $userId == auth.uid"
       }
     }
   }
 }
+
