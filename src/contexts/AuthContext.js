@@ -264,12 +264,27 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Filter out undefined/null fields (especially location.address)
+  const filterUndefined = (obj) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    const filtered = {};
+    for (const key in obj) {
+      if (obj[key] === undefined) continue;
+      if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+        filtered[key] = filterUndefined(obj[key]);
+      } else {
+        filtered[key] = obj[key];
+      }
+    }
+    return filtered;
+  };
+
   const updateUser = async (updates) => {
     if (!state.user) return;
-    
     try {
-      await updateUserProfile(state.user.uid, updates);
-      dispatch({ type: 'UPDATE_USER_DATA', payload: updates });
+      const safeUpdates = filterUndefined(updates);
+      await updateUserProfile(state.user.uid, safeUpdates);
+      dispatch({ type: 'UPDATE_USER_DATA', payload: safeUpdates });
       return { success: true };
     } catch (error) {
       console.error('Update user failed:', error);

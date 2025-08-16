@@ -1,3 +1,37 @@
+  // Dashboard tab content renderer
+  const renderDashboard = (stats) => (
+    <div>
+      <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>System Overview</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 20, marginBottom: 32 }}>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.totalUsers}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Total Users</div>
+        </div>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.activeUsers}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Active Users</div>
+        </div>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.totalRequests}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Total Requests</div>
+        </div>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.pendingRequests}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Pending Requests</div>
+        </div>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.totalShelters}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Total Shelters</div>
+        </div>
+        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.availableSpots}</div>
+          <div style={{ color: '#718096', fontSize: '0.9rem' }}>Available Spots</div>
+        </div>
+      </div>
+      {/* You can add more dashboard widgets or charts here as needed */}
+    </div>
+  );
+
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
@@ -27,6 +61,59 @@ import { subscribeToActivePanicAlerts } from '../firebase/alerts';
 import RequestLocationMap from '../components/common/RequestLocationMap';
 import RequestsMap from '../components/RequestsMap';
 
+// Helper: Get icon for request category
+const getCategoryIcon = (category) => {
+  switch (category) {
+    case 'medical': return '🏥';
+    case 'food': return '🍽️';
+    case 'shelter': return '🏠';
+    case 'transport': return '🚗';
+    case 'clothing': return '👕';
+    default: return '❓';
+  }
+};
+
+// Helper: Get color for urgency
+const getUrgencyColor = (urgency) => {
+  switch (urgency) {
+    case 'critical': return '#e53e3e';
+    case 'high': return '#dd6b20';
+    case 'medium': return '#d69e2e';
+    case 'low': return '#38a169';
+    default: return '#718096';
+  }
+};
+
+// Helper: Get color for status
+const getStatusColor = (status) => {
+  switch (status) {
+    case 'pending': return '#d69e2e';
+    case 'in-progress': return '#3182ce';
+    case 'resolved': return '#38a169';
+    case 'cancelled': return '#e53e3e';
+    default: return '#718096';
+  }
+};
+
+// Helper: Format timestamp
+const formatTime = (timestamp) => {
+  if (!timestamp) return 'Recently';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleString();
+};
+
+// Handler: Mark panic alert as resolved
+const handleResolvePanicAlert = async (alertId) => {
+  try {
+    // You may need to import/update this logic to match your Firestore structure
+    // Example: await updateDoc(doc(db, 'panic_alerts', alertId), { resolved: true, resolvedAt: new Date() });
+    // For now, just show a notification
+    alert('Panic alert marked as resolved! (Implement Firestore update logic)');
+  } catch (error) {
+    alert('Failed to resolve alert');
+  }
+};
+
 const AdminPanelPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
@@ -46,6 +133,86 @@ const AdminPanelPage = () => {
   });
   const [errorMsg, setErrorMsg] = useState('');
   const [panicAlerts, setPanicAlerts] = useState([]);
+
+  // Shelter modal state (must be inside component)
+  const [showShelterModal, setShowShelterModal] = useState(false);
+  const [editingShelter, setEditingShelter] = useState(null);
+  const [shelterForm, setShelterForm] = useState({
+    name: '',
+    capacity: '',
+    contact: '',
+    description: '',
+    status: 'open',
+    location: { lat: '', lng: '' },
+  });
+
+  const openAddShelter = () => {
+    setEditingShelter(null);
+    setShelterForm({ name: '', capacity: '', contact: '', description: '', status: 'open', location: { lat: '', lng: '' } });
+    setShowShelterModal(true);
+  };
+  const openEditShelter = (shelter) => {
+    setEditingShelter(shelter);
+    setShelterForm({
+      name: shelter.name || '',
+      capacity: shelter.capacity || '',
+      contact: shelter.contact || '',
+      description: shelter.description || '',
+      status: shelter.status || 'open',
+      location: shelter.location || { lat: '', lng: '' },
+    });
+    setShowShelterModal(true);
+  };
+  const closeShelterModal = () => {
+    setShowShelterModal(false);
+    setEditingShelter(null);
+  };
+
+  const handleShelterFormChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'lat' || name === 'lng') {
+      setShelterForm((prev) => ({ ...prev, location: { ...prev.location, [name]: value } }));
+    } else {
+      setShelterForm((prev) => ({ ...prev, [name]: value }));
+    }
+  };
+
+  const handleShelterSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingShelter) {
+        await updateShelter(editingShelter.id, {
+          ...shelterForm,
+          capacity: parseInt(shelterForm.capacity),
+          location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) },
+        });
+        setShelters((prev) => prev.map((s) => s.id === editingShelter.id ? { ...s, ...shelterForm, capacity: parseInt(shelterForm.capacity), location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) } } : s));
+        addNotification('Shelter updated successfully!', 'success');
+      } else {
+        const newShelter = await createShelter({
+          ...shelterForm,
+          capacity: parseInt(shelterForm.capacity),
+          location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) },
+        });
+        setShelters((prev) => [newShelter, ...prev]);
+        addNotification('Shelter added successfully!', 'success');
+      }
+      closeShelterModal();
+    } catch (error) {
+      addNotification('Failed to save shelter', 'error');
+    }
+  };
+
+  const handleDeleteShelter = async (shelterId) => {
+    if (!window.confirm('Are you sure you want to delete this shelter?')) return;
+    try {
+      await deleteShelter(shelterId);
+      setShelters((prev) => prev.filter((s) => s.id !== shelterId));
+      addNotification('Shelter deleted successfully!', 'success');
+    } catch (error) {
+      addNotification('Failed to delete shelter', 'error');
+    }
+  };
 
   // Load all data
   useEffect(() => {
@@ -132,12 +299,9 @@ const AdminPanelPage = () => {
         addNotification('User deletion not implemented in demo', 'info');
         return;
       }
-      
       if (action === 'updateRole' && newRole) {
         await updateUserRole(userId, newRole);
-        setUsers(prev => prev.map(user => 
-          user.id === userId ? { ...user, role: newRole } : user
-        ));
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
         addNotification(`User role updated to ${newRole}`, 'success');
       }
     } catch (error) {
@@ -184,11 +348,11 @@ const AdminPanelPage = () => {
         await deleteShelter(shelterId);
         setShelters(prev => prev.filter(shelter => shelter.id !== shelterId));
         addNotification('Shelter deleted successfully', 'success');
-      } else if (action === 'update') {
+        return;
+      }
+      if (action === 'update' && updates) {
         await updateShelter(shelterId, updates);
-        setShelters(prev => prev.map(shelter => 
-          shelter.id === shelterId ? { ...shelter, ...updates } : shelter
-        ));
+        setShelters(prev => prev.map(s => s.id === shelterId ? { ...s, ...updates } : s));
         addNotification('Shelter updated successfully', 'success');
       }
     } catch (error) {
@@ -196,141 +360,7 @@ const AdminPanelPage = () => {
       addNotification('Failed to update shelter', 'error');
     }
   };
-
-  const handleResolvePanicAlert = async (alertId) => {
-    try {
-      // Mark as resolved in Firestore
-      // (You can implement this in firebase/alerts.js)
-      // For now, just remove from UI
-      setPanicAlerts(prev => prev.filter(alert => alert.id !== alertId));
-      addNotification('Panic alert marked as resolved', 'success');
-    } catch (error) {
-      addNotification('Failed to resolve alert', 'error');
-    }
-  };
-
-  const formatTime = (timestamp) => {
-    if (!timestamp) return 'Recently';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleString();
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'pending': return '#d69e2e';
-      case 'in-progress': return '#3182ce';
-      case 'resolved': return '#38a169';
-      case 'cancelled': return '#e53e3e';
-      default: return '#718096';
-    }
-  };
-
-  const getUrgencyColor = (urgency) => {
-    switch (urgency) {
-      case 'critical': return '#e53e3e';
-      case 'high': return '#dd6b20';
-      case 'medium': return '#d69e2e';
-      case 'low': return '#38a169';
-      default: return '#718096';
-    }
-  };
-
-  const getCategoryIcon = (category) => {
-    switch (category) {
-      case 'medical': return '🏥';
-      case 'food': return '🍽️';
-      case 'shelter': return '🏠';
-      case 'transport': return '🚗';
-      case 'clothing': return '👕';
-      default: return '❓';
-    }
-  };
-
-  const renderDashboard = () => (
-    <div>
-      <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>System Overview</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 20, marginBottom: 32 }}>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <span style={{ fontSize: '2rem' }}>👥</span>
-            <div>
-              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.totalUsers}</div>
-              <div style={{ color: '#718096', fontSize: '0.9rem' }}>Total Users</div>
-            </div>
-          </div>
-        </div>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <span style={{ fontSize: '2rem' }}>📝</span>
-            <div>
-              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.totalRequests}</div>
-              <div style={{ color: '#718096', fontSize: '0.9rem' }}>Total Requests</div>
-            </div>
-          </div>
-        </div>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <span style={{ fontSize: '2rem' }}>⏳</span>
-            <div>
-              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.pendingRequests}</div>
-              <div style={{ color: '#718096', fontSize: '0.9rem' }}>Pending Requests</div>
-            </div>
-          </div>
-        </div>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <span style={{ fontSize: '2rem' }}>🏠</span>
-            <div>
-              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#2d3748' }}>{stats.availableSpots}</div>
-              <div style={{ color: '#718096', fontSize: '0.9rem' }}>Available Spots</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <h3 style={{ color: '#2d3748', marginBottom: 16, fontSize: '1.2rem', fontWeight: '600' }}>Recent Activity</h3>
-          <div style={{ fontSize: 14, color: '#718096' }}>
-            {requests.slice(0, 5).map((request, index) => (
-              <div key={index} style={{ marginBottom: 8, padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>{getCategoryIcon(request.category)}</span>
-                  <span style={{ color: '#4a5568' }}>
-                    New {request.category} request from {request.contact?.name || 'Anonymous'}
-                  </span>
-                </div>
-                <div style={{ fontSize: '12px', marginLeft: 24 }}>
-                  {formatTime(request.createdAt)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div style={{ background: '#fff', padding: 24, borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0' }}>
-          <h3 style={{ color: '#2d3748', marginBottom: 16, fontSize: '1.2rem', fontWeight: '600' }}>System Status</h3>
-          <div style={{ fontSize: 14, color: '#718096' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: '#38a169' }}>●</span>
-              <span>Database: Online</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: '#38a169' }}>●</span>
-              <span>API Services: Operational</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ color: '#38a169' }}>●</span>
-              <span>Real-time Updates: Active</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#38a169' }}>●</span>
-              <span>Backup System: Running</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+// ...existing code...
 
   const renderUserManagement = () => (
     <div>
@@ -554,6 +584,23 @@ const AdminPanelPage = () => {
   const renderShelterManagement = () => (
     <div>
       <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Shelter Management</h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <button
+          onClick={openAddShelter}
+          style={{
+            background: '#3182ce',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 20px',
+            fontWeight: 600,
+            fontSize: 16,
+            cursor: 'pointer'
+          }}
+        >
+          + Add Shelter
+        </button>
+      </div>
       <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -623,6 +670,53 @@ const AdminPanelPage = () => {
           </tbody>
         </table>
       </div>
+      {/* Shelter Modal */}
+      {showShelterModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <form onSubmit={handleShelterSubmit} style={{ background: '#fff', borderRadius: 16, padding: 32, minWidth: 320, maxWidth: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+            <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.3rem', fontWeight: '600' }}>{editingShelter ? 'Edit Shelter' : 'Add Shelter'}</h3>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Name</label>
+              <input name="name" value={shelterForm.name} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Capacity</label>
+              <input name="capacity" type="number" value={shelterForm.capacity} onChange={handleShelterFormChange} required min={1} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Contact</label>
+              <input name="contact" value={shelterForm.contact} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Description</label>
+              <textarea name="description" value={shelterForm.description} onChange={handleShelterFormChange} rows={2} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+            </div>
+            <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Latitude</label>
+                <input name="lat" type="number" value={shelterForm.location.lat} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Longitude</label>
+                <input name="lng" type="number" value={shelterForm.location.lng} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Status</label>
+              <select name="status" value={shelterForm.status} onChange={handleShelterFormChange} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                <option value="open">Open</option>
+                <option value="closed">Closed</option>
+                <option value="limited">Limited</option>
+                <option value="full">Full</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={closeShelterModal} style={{ background: '#e2e8f0', color: '#2d3748', border: 'none', borderRadius: 6, padding: '8px 18px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button type="submit" style={{ background: '#3182ce', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 18px', fontWeight: 600, cursor: 'pointer' }}>{editingShelter ? 'Update' : 'Add'}</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 
@@ -900,7 +994,7 @@ const AdminPanelPage = () => {
           boxShadow: '0 4px 12px #e2e8f0',
           border: '1px solid #e2e8f0'
         }}>
-          {activeTab === 'dashboard' && renderDashboard()}
+          {activeTab === 'dashboard' && renderDashboard(stats)}
           {activeTab === 'users' && renderUserManagement()}
           {activeTab === 'requests' && renderRequestMonitoring()}
           {activeTab === 'map' && renderMap()}
