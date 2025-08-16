@@ -19,7 +19,8 @@ service cloud.firestore {
     
     // Helper functions that can be used after user document exists
     function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return userDoc != null ? userDoc.data.role : null;
     }
     
     function isAdmin() {
@@ -42,7 +43,23 @@ service cloud.firestore {
     // Shelters collection
     match /shelters/{shelterId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated() && (isAdmin() || isVolunteer());
+    }
+    
+    // Shelter Requests collection
+    match /shelter_requests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (isAdmin() || isVolunteer() || isOwner(resource.data.requesterId));
+      allow delete: if isAuthenticated() && (isAdmin() || isVolunteer());
+    }
+    
+    // Simple Booking collection
+    match /booking/{bookingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (isAdmin() || isVolunteer());
+      allow delete: if isAuthenticated() && (isAdmin() || isVolunteer());
     }
     
     // Donations collection
@@ -67,6 +84,16 @@ service cloud.firestore {
     
     // Panic Alerts collection
     match /panic_alerts/{alertId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Chat collection
+    match /chat/{chatId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Messages subcollection
+    match /chat/{chatId}/messages/{messageId} {
       allow read, write: if isAuthenticated();
     }
   }

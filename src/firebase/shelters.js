@@ -253,8 +253,8 @@ export const subscribeToShelters = (callback, filters = {}) => {
       q = query(q, where('status', '==', filters.status));
     }
     
-    // Always order by creation date
-    q = query(q, orderBy('createdAt', 'desc'));
+    // Don't use orderBy for now to avoid index issues
+    // We'll sort the data in JavaScript instead
     
     return onSnapshot(q, (querySnapshot) => {
       const shelters = [];
@@ -269,10 +269,29 @@ export const subscribeToShelters = (callback, filters = {}) => {
           } : null
         });
       });
+      
+      // Sort by creation date in JavaScript if available, otherwise by name
+      shelters.sort((a, b) => {
+        if (a.createdAt && b.createdAt) {
+          return b.createdAt.toDate ? b.createdAt.toDate() - a.createdAt.toDate() : 0;
+        }
+        if (a.createdAt && !b.createdAt) return -1;
+        if (!a.createdAt && b.createdAt) return 1;
+        // Fallback to alphabetical by name
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      
+      console.log('Shelters data received:', shelters.length, 'shelters');
       callback(shelters);
+    }, (error) => {
+      console.error('Error in shelters snapshot:', error);
+      // Call callback with empty array on error
+      callback([]);
     });
   } catch (error) {
     console.error('Error subscribing to shelters:', error);
+    // Call callback with empty array on error
+    callback([]);
     throw error;
   }
 };

@@ -16,11 +16,27 @@ import { subscribeToActivePanicAlerts } from '../firebase/alerts';
 import { db } from '../firebase/config';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import RequestsMap from '../components/RequestsMap';
+import { 
+  getAllShelters, 
+  createShelter, 
+  updateShelter, 
+  deleteShelter,
+  subscribeToShelters 
+} from '../firebase/shelters';
+import { 
+  getAllShelterRequests,
+  approveShelterRequest,
+  rejectShelterRequest,
+  subscribeToShelterRequests,
+  SHELTER_REQUEST_STATUS
+} from '../firebase/shelterRequests';
 
 const VolunteerViewPage = () => {
   const { t } = useTranslation();
   const { addNotification, getCurrentLocation, setManualLocation } = useApp();
   const { user, userData } = useAuth();
+  
+  // Basic state
   const [requests, setRequests] = useState([]);
   const [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState(null);
@@ -39,9 +55,10 @@ const VolunteerViewPage = () => {
     category: 'general',
     description: '',
     amount: '',
-    type: 'monetary' // monetary, goods, services
+    type: 'monetary'
   });
 
+  // Panic alerts
   const [panicAlerts, setPanicAlerts] = useState([]);
   const [showManualLocationPrompt, setShowManualLocationPrompt] = useState(false);
   const [manualLat, setManualLat] = useState('');
@@ -49,157 +66,22 @@ const VolunteerViewPage = () => {
   const [manualAddress, setManualAddress] = useState('');
   const [isGeocoding, setIsGeocoding] = useState(false);
 
-  // Get user location for distance calculation - only on mount, not repeatedly
-  useEffect(() => {
-    const getUserLocation = async () => {
-      try {
-        const location = await getCurrentLocation();
-        setUserLocation(location);
-      } catch (error) {
-        // Don't show modal automatically - only when user clicks "Update Location"
-        console.log('Location not available on mount:', error.message);
-      }
-    };
-    getUserLocation();
-  }, []); // Remove getCurrentLocation dependency to prevent repeated calls
+  // Shelter management state
+  const [activeTab, setActiveTab] = useState('requests');
+  const [shelters, setShelters] = useState([]);
+  const [shelterRequests, setShelterRequests] = useState([]);
+  const [showShelterModal, setShowShelterModal] = useState(false);
+  const [editingShelter, setEditingShelter] = useState(null);
+  const [shelterForm, setShelterForm] = useState({
+    name: '',
+    capacity: '',
+    contact: '',
+    description: '',
+    status: 'open',
+    location: { lat: '', lng: '' },
+  });
 
-  // Manual location entry fallback
-  const handleManualLocationSave = async () => {
-    setIsGeocoding(true);
-    let ok = false;
-    if (manualAddress && (!manualLat || !manualLng)) {
-      ok = await setManualLocation('', '', manualAddress);
-    } else {
-      ok = await setManualLocation(manualLat, manualLng, manualAddress);
-    }
-    setIsGeocoding(false);
-    if (ok) {
-      setManualAddress('');
-      setShowManualLocationPrompt(false);
-      setManualLat('');
-      setManualLng('');
-      addNotification('Location set successfully!', 'success');
-    }
-  };
-
-  // Handle manual location update button click
-  const handleLocationUpdate = async () => {
-    try {
-      const location = await getCurrentLocation();
-      setUserLocation(location);
-      addNotification('Location updated successfully!', 'success');
-    } catch (error) {
-      setShowManualLocationPrompt(true);
-    }
-  };
-
-  // Handle panic alert actions
-  const handlePanicAlertAction = async (alertId, action, alert) => {
-    try {
-      if (action === 'respond') {
-        // Mark panic alert as responded to
-        await updateDoc(doc(db, 'panic_alerts', alertId), {
-          respondedBy: user.uid,
-          respondedAt: serverTimestamp(),
-          status: 'responded'
-        });
-        addNotification('Panic alert marked as responded! Now you can call or message the requester.', 'success');
-      } else if (action === 'resolve') {
-        // Mark panic alert as resolved
-        await updateDoc(doc(db, 'panic_alerts', alertId), {
-          resolvedBy: user.uid,
-          resolvedAt: serverTimestamp(),
-          resolved: true,
-          status: 'resolved'
-        });
-        addNotification('Panic alert marked as resolved!', 'success');
-      } else if (action === 'call') {
-        // Call the panic alert requester
-        if (alert.phone) {
-          window.open(`tel:${alert.phone}`, '_self');
-          addNotification('Initiating call to requester...', 'info');
-        } else {
-          addNotification('No phone number available for this requester', 'warning');
-        }
-      } else if (action === 'message') {
-        // Send SMS to the panic alert requester
-        if (alert.phone) {
-          const message = `Emergency Response: We have received your panic alert. Help is on the way. Please stay safe and call 999 if immediate danger.`;
-          window.open(`sms:${alert.phone}?body=${encodeURIComponent(message)}`, '_self');
-          addNotification('Opening SMS to requester...', 'info');
-        } else {
-          addNotification('No phone number available for this requester', 'warning');
-        }
-      }
-    } catch (error) {
-      console.error('Error updating panic alert:', error);
-      addNotification('Failed to update panic alert', 'error');
-    }
-  };
-
-  // Subscribe to active panic alerts
-  useEffect(() => {
-    const unsubscribe = subscribeToActivePanicAlerts((alerts) => {
-      console.log('Received panic alerts:', alerts);
-      
-      // Ensure all alerts have phone numbers
-      const alertsWithPhone = alerts.map(alert => {
-        if (!alert.phone) {
-          console.log('Found alert without phone, adding default phone:', alert.id);
-          // Update the alert in Firestore to add phone number
-          updateDoc(doc(db, 'panic_alerts', alert.id), {
-            phone: '1234567890'
-          }).catch(error => {
-            console.error('Error updating alert phone:', error);
-          });
-          return { ...alert, phone: '1234567890' };
-        }
-        return alert;
-      });
-      
-      alertsWithPhone.forEach(alert => {
-        console.log('Alert phone number:', alert.phone, 'Alert ID:', alert.id);
-      });
-      
-      setPanicAlerts(alertsWithPhone);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Subscribe to real-time requests
-  useEffect(() => {
-    if (!user || !user.uid || !userData) return;
-    const unsubscribe = subscribeToRequests((requestsData) => {
-      // Calculate distances if user location is available
-      const requestsWithDistance = requestsData.map(request => {
-        if (userLocation && request.location) {
-          const distance = calculateDistance(
-            userLocation.lat,
-            userLocation.lng,
-            request.location.lat,
-            request.location.lng
-          );
-          return { ...request, distance: distance.toFixed(1) };
-        }
-        return { ...request, distance: null };
-      });
-      setRequests(requestsWithDistance);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [user, userData, userLocation]);
-
-  // Subscribe to chat when a request is selected
-  useEffect(() => {
-    if (!selected || !user) return;
-
-    const unsubscribe = subscribeToChat(selected.id, (messages) => {
-      setChatMessages(messages);
-    });
-
-    return () => unsubscribe();
-  }, [selected, user]);
-
+  // Helper functions
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
     const R = 6371; // Earth's radius in kilometers
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -210,95 +92,6 @@ const VolunteerViewPage = () => {
       Math.sin(dLng/2) * Math.sin(dLng/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     return R * c;
-  };
-
-  const handleAccept = async (requestId) => {
-    try {
-      await assignVolunteerToRequest(requestId, user.uid);
-      addNotification('Request accepted successfully!', 'success');
-    } catch (error) {
-      console.error('Error accepting request:', error);
-      addNotification('Failed to accept request', 'error');
-    }
-  };
-
-  const handleDecline = async (requestId) => {
-    try {
-      await updateRequestStatus(requestId, 'cancelled');
-      addNotification('Request declined.', 'info');
-      if (selected && selected.id === requestId) {
-        setSelected(null);
-      }
-    } catch (error) {
-      console.error('Error declining request:', error);
-      addNotification('Failed to decline request', 'error');
-    }
-  };
-
-  const handleComplete = async (requestId) => {
-    try {
-      await updateRequestStatus(requestId, 'resolved');
-      addNotification('Request marked as completed!', 'success');
-    } catch (error) {
-      console.error('Error completing request:', error);
-      addNotification('Failed to complete request', 'error');
-    }
-  };
-
-  // Chat functions
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !selected) return;
-
-    try {
-      setChatLoading(true);
-      await sendMessage(selected.id, {
-        text: newMessage,
-        senderId: user.uid,
-        senderName: userData?.displayName || 'Volunteer',
-        senderRole: 'volunteer'
-      });
-      setNewMessage('');
-    } catch (error) {
-      console.error('Error sending message:', error);
-      addNotification('Failed to send message', 'error');
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
-  // Donation functions
-  const handleDonationSubmit = async (e) => {
-    e.preventDefault();
-    if (!donationForm.title || !donationForm.description) {
-      addNotification('Please fill in all required fields', 'error');
-      return;
-    }
-
-    try {
-      const donationData = {
-        ...donationForm,
-        amount: donationForm.type === 'monetary' ? parseFloat(donationForm.amount) : null,
-        donorId: user.uid,
-        donorName: userData?.displayName || 'Anonymous Volunteer',
-        linkedRequestId: selected?.id || null,
-        status: 'pending'
-      };
-
-      await createDonation(donationData);
-      addNotification('Donation submitted successfully!', 'success');
-      setShowDonationModal(false);
-      setDonationForm({
-        title: '',
-        category: 'general',
-        description: '',
-        amount: '',
-        type: 'monetary'
-      });
-    } catch (error) {
-      console.error('Error creating donation:', error);
-      addNotification('Failed to submit donation', 'error');
-    }
   };
 
   const getStatusColor = (status) => {
@@ -332,6 +125,361 @@ const VolunteerViewPage = () => {
     }
   };
 
+  // Get user location for distance calculation
+  useEffect(() => {
+    const getUserLocation = async () => {
+      try {
+        const location = await getCurrentLocation();
+        setUserLocation(location);
+      } catch (error) {
+        console.log('Location not available on mount:', error.message);
+      }
+    };
+    getUserLocation();
+  }, []);
+
+  // Subscribe to real-time requests
+  useEffect(() => {
+    if (!user || !user.uid || !userData) return;
+    const unsubscribe = subscribeToRequests((requestsData) => {
+      const requestsWithDistance = requestsData.map(request => {
+        if (userLocation && request.location) {
+          const distance = calculateDistance(
+            userLocation.lat,
+            userLocation.lng,
+            request.location.lat,
+            request.location.lng
+          );
+          return { ...request, distance: distance.toFixed(1) };
+        }
+        return { ...request, distance: null };
+      });
+      setRequests(requestsWithDistance);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user, userData, userLocation]);
+
+  // Subscribe to real-time shelters
+  useEffect(() => {
+    if (!user || !user.uid) return;
+    const unsubscribe = subscribeToShelters((sheltersData) => {
+      setShelters(sheltersData);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Simple: Just show empty state, let user load data manually
+  useEffect(() => {
+    if (!user || !user.uid) return;
+    
+    // Don't auto-load anything, let user choose what to load
+    setShelterRequests([]);
+  }, [user]);
+
+  // Subscribe to chat when a request is selected
+  useEffect(() => {
+    if (!selected || !user) return;
+    const unsubscribe = subscribeToChat(selected.id, (messages) => {
+      setChatMessages(messages);
+    });
+    return () => unsubscribe();
+  }, [selected, user]);
+
+  // Subscribe to real-time panic alerts
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = subscribeToActivePanicAlerts((alerts) => {
+      setPanicAlerts(alerts);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Event handlers
+  const handleAccept = async (requestId) => {
+    try {
+      // Update booking status in text file
+      const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
+      const updatedBookings = allBookings.map(booking => {
+        if (booking.id === requestId) {
+          return {
+            ...booking,
+            status: 'approved',
+            approvedBy: user.uid,
+            approvedAt: new Date().toISOString()
+          };
+        }
+        return booking;
+      });
+      
+      localStorage.setItem('textFileBookings', JSON.stringify(updatedBookings));
+      addNotification('Booking approved successfully!', 'success');
+      
+      // Refresh the list
+      setShelterRequests(updatedBookings);
+    } catch (error) {
+      console.error('Error approving booking:', error);
+      addNotification('Failed to approve booking', 'error');
+    }
+  };
+
+  const handleDecline = async (requestId) => {
+    try {
+      // Update booking status in text file
+      const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
+      const updatedBookings = allBookings.map(booking => {
+        if (booking.id === requestId) {
+          return {
+            ...booking,
+            status: 'rejected',
+            rejectedBy: user.uid,
+            rejectedAt: new Date().toISOString()
+          };
+        }
+        return booking;
+      });
+      
+      localStorage.setItem('textFileBookings', JSON.stringify(updatedBookings));
+      addNotification('Booking rejected.', 'info');
+      
+      if (selected && selected.id === requestId) {
+        setSelected(null);
+      }
+      
+      // Refresh the list
+      setShelterRequests(updatedBookings);
+    } catch (error) {
+      console.error('Error rejecting booking:', error);
+      addNotification('Failed to reject booking', 'error');
+    }
+  };
+
+  const handleComplete = async (requestId) => {
+    try {
+      await updateRequestStatus(requestId, 'resolved');
+      addNotification('Request marked as completed!', 'success');
+    } catch (error) {
+      console.error('Error completing request:', error);
+      addNotification('Failed to complete request', 'error');
+    }
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !selected) return;
+
+    try {
+      setChatLoading(true);
+      await sendMessage(selected.id, {
+        text: newMessage,
+        senderId: user.uid,
+        senderName: userData?.displayName || 'Volunteer',
+        senderRole: 'volunteer'
+      });
+      setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      addNotification('Failed to send message', 'error');
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleDonationSubmit = async (e) => {
+    e.preventDefault();
+    if (!donationForm.title || !donationForm.description) {
+      addNotification('Please fill in all required fields', 'error');
+      return;
+    }
+
+    try {
+      const donationData = {
+        ...donationForm,
+        amount: donationForm.type === 'monetary' ? parseFloat(donationForm.amount) : null,
+        donorId: user.uid,
+        donorName: userData?.displayName || 'Anonymous Volunteer',
+        linkedRequestId: selected?.id || null,
+        status: 'pending'
+      };
+
+      await createDonation(donationData);
+      addNotification('Donation submitted successfully!', 'success');
+      setShowDonationModal(false);
+      setDonationForm({
+        title: '',
+        category: 'general',
+        description: '',
+        amount: '',
+        type: 'monetary'
+      });
+    } catch (error) {
+      console.error('Error creating donation:', error);
+      addNotification('Failed to submit donation', 'error');
+    }
+  };
+
+  // Shelter management functions
+  const openAddShelter = () => {
+    setEditingShelter(null);
+    setShelterForm({ name: '', capacity: '', contact: '', description: '', status: 'open', location: { lat: '', lng: '' } });
+    setShowShelterModal(true);
+  };
+
+  const openEditShelter = (shelter) => {
+    setEditingShelter(shelter);
+    setShelterForm({
+      name: shelter.name || '',
+      capacity: shelter.capacity || '',
+      contact: shelter.contact || '',
+      description: shelter.description || '',
+      status: shelter.status || 'open',
+      location: shelter.location || { lat: '', lng: '' },
+    });
+    setShowShelterModal(true);
+  };
+
+  const closeShelterModal = () => {
+    setShowShelterModal(false);
+    setEditingShelter(null);
+  };
+
+  const handleShelterFormChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'lat' || name === 'lng') {
+      setShelterForm((prev) => ({ ...prev, location: { ...prev.location, [name]: value } }));
+    } else {
+      setShelterForm((prev) => ({ ...prev, [name]: value }));
+    }
+  };
+
+  const handleShelterSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingShelter) {
+        await updateShelter(editingShelter.id, {
+          ...shelterForm,
+          capacity: parseInt(shelterForm.capacity),
+          location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) },
+        });
+        setShelters((prev) => prev.map((s) => s.id === editingShelter.id ? { ...s, ...shelterForm, capacity: parseInt(shelterForm.capacity), location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) } } : s));
+        addNotification('Shelter updated successfully!', 'success');
+      } else {
+        const newShelter = await createShelter({
+          ...shelterForm,
+          capacity: parseInt(shelterForm.capacity),
+          location: { lat: parseFloat(shelterForm.location.lat), lng: parseFloat(shelterForm.location.lng) },
+        });
+        setShelters((prev) => [newShelter, ...prev]);
+        addNotification('Shelter added successfully!', 'success');
+      }
+      closeShelterModal();
+    } catch (error) {
+      addNotification('Failed to save shelter', 'error');
+    }
+  };
+
+  const handleDeleteShelter = async (shelterId) => {
+    if (!window.confirm('Are you sure you want to delete this shelter?')) return;
+    try {
+      await deleteShelter(shelterId);
+      setShelters((prev) => prev.filter((s) => s.id !== shelterId));
+      addNotification('Shelter deleted successfully!', 'success');
+    } catch (error) {
+      addNotification('Failed to delete shelter', 'error');
+    }
+  };
+
+  // Shelter request functions
+  const handleApproveShelterRequest = async (requestId) => {
+    try {
+      await approveShelterRequest(requestId, user.uid);
+      addNotification('Shelter request approved successfully!', 'success');
+    } catch (error) {
+      console.error('Error approving shelter request:', error);
+      addNotification('Failed to approve shelter request', 'error');
+    }
+  };
+
+  const handleRejectShelterRequest = async (requestId) => {
+    try {
+      await rejectShelterRequest(requestId, user.uid);
+      addNotification('Shelter request rejected successfully!', 'success');
+    } catch (error) {
+      console.error('Error rejecting shelter request:', error);
+      addNotification('Failed to reject shelter request', 'error');
+    }
+  };
+
+  // Manual location functions
+  const handleManualLocationSave = async () => {
+    setIsGeocoding(true);
+    let ok = false;
+    if (manualAddress && (!manualLat || !manualLng)) {
+      ok = await setManualLocation('', '', manualAddress);
+    } else {
+      ok = await setManualLocation(manualLat, manualLng, manualAddress);
+    }
+    setIsGeocoding(false);
+    if (ok) {
+      setManualAddress('');
+      setShowManualLocationPrompt(false);
+      setManualLat('');
+      setManualLng('');
+      addNotification('Location set successfully!', 'success');
+    }
+  };
+
+  const handleLocationUpdate = async () => {
+    try {
+      const location = await getCurrentLocation();
+      setUserLocation(location);
+      addNotification('Location updated successfully!', 'success');
+    } catch (error) {
+      setShowManualLocationPrompt(true);
+    }
+  };
+
+  // Panic alert functions
+  const handlePanicAlertAction = async (alertId, action, alert) => {
+    try {
+      if (action === 'respond') {
+        await updateDoc(doc(db, 'panic_alerts', alertId), {
+          respondedBy: user.uid,
+          respondedAt: serverTimestamp(),
+          status: 'responded'
+        });
+        addNotification('Panic alert marked as responded!', 'success');
+      } else if (action === 'resolve') {
+        await updateDoc(doc(db, 'panic_alerts', alertId), {
+          resolvedBy: user.uid,
+          resolvedAt: serverTimestamp(),
+          resolved: true,
+          status: 'resolved'
+        });
+        addNotification('Panic alert marked as resolved!', 'success');
+      } else if (action === 'call') {
+        if (alert.phone) {
+          window.open(`tel:${alert.phone}`, '_self');
+          addNotification('Initiating call to requester...', 'info');
+        } else {
+          addNotification('No phone number available for this requester', 'warning');
+        }
+      } else if (action === 'message') {
+        if (alert.phone) {
+          const message = `Emergency Response: We have received your panic alert. Help is on the way. Please stay safe and call 999 if immediate danger.`;
+          window.open(`sms:${alert.phone}?body=${encodeURIComponent(message)}`, '_self');
+          addNotification('Opening SMS to requester...', 'info');
+        } else {
+          addNotification('No phone number available for this requester', 'warning');
+        }
+      }
+    } catch (error) {
+      console.error('Error updating panic alert:', error);
+      addNotification('Failed to update panic alert', 'error');
+    }
+  };
+
+  // Filter requests
   const filteredRequests = requests.filter(request => {
     if (filter === 'all') return true;
     if (filter === 'pending') return request.status === 'pending';
@@ -357,9 +505,43 @@ const VolunteerViewPage = () => {
           {t('volunteer.title') || 'Volunteer Dashboard'}
         </h1>
         
+        {/* Tab Navigation */}
+        <div style={{ 
+          background: '#fff', 
+          borderRadius: 16, 
+          padding: 20, 
+          marginBottom: 20, 
+          boxShadow: '0 4px 12px #e2e8f0',
+          border: '1px solid #e2e8f0'
+        }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[
+              { id: 'requests', label: 'Emergency Requests' },
+              { id: 'shelters', label: 'Shelter Management' },
+              { id: 'shelter-requests', label: 'Shelter Requests' }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{ 
+                  background: activeTab === tab.id ? '#667eea' : '#fff', 
+                  color: activeTab === tab.id ? '#fff' : '#4a5568', 
+                  border: '1px solid #e2e8f0', 
+                  borderRadius: 8, 
+                  padding: '12px 20px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-
-        {/* Panic Alerts Section */}
+        {/* Panic Alerts Section - Always visible */}
         {panicAlerts.length > 0 && (
           <div style={{ background: '#fff5f5', border: '1px solid #e53e3e', borderRadius: 12, padding: 16, marginBottom: 24 }}>
             <h2 style={{ color: '#e53e3e', marginBottom: 12 }}>🚨 Active Panic Alerts</h2>
@@ -386,7 +568,6 @@ const VolunteerViewPage = () => {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {/* Respond button - first step */}
                     {!alert.respondedBy && (
                       <button
                         onClick={() => handlePanicAlertAction(alert.id, 'respond', alert)}
@@ -404,7 +585,6 @@ const VolunteerViewPage = () => {
                       </button>
                     )}
                     
-                    {/* Call and Message buttons - only after responding */}
                     {alert.respondedBy && !alert.resolved && alert.phone && (
                       <>
                         <button
@@ -416,13 +596,10 @@ const VolunteerViewPage = () => {
                             borderRadius: 6,
                             padding: '6px 12px',
                             fontSize: 12,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4
+                            cursor: 'pointer'
                           }}
                         >
-                          📞 Call Now
+                          📞 Call
                         </button>
                         <button
                           onClick={() => handlePanicAlertAction(alert.id, 'message', alert)}
@@ -433,18 +610,14 @@ const VolunteerViewPage = () => {
                             borderRadius: 6,
                             padding: '6px 12px',
                             fontSize: 12,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4
+                            cursor: 'pointer'
                           }}
                         >
-                          💬 Message Now
+                          💬 SMS
                         </button>
                       </>
                     )}
                     
-                    {/* Resolve button - after responding */}
                     {alert.respondedBy && !alert.resolved && (
                       <button
                         onClick={() => handlePanicAlertAction(alert.id, 'resolve', alert)}
@@ -461,25 +634,6 @@ const VolunteerViewPage = () => {
                         Resolve
                       </button>
                     )}
-                    
-                    {/* Status indicators */}
-                    {alert.respondedBy && !alert.resolved && (
-                      <span style={{ fontSize: 12, color: '#3182ce', fontWeight: 600 }}>
-                        Responded
-                      </span>
-                    )}
-                    {alert.resolved && (
-                      <span style={{ fontSize: 12, color: '#38a169', fontWeight: 600 }}>
-                        Resolved
-                      </span>
-                    )}
-                    
-                    {/* No phone number indicator - only after responding */}
-                    {alert.respondedBy && !alert.resolved && !alert.phone && (
-                      <span style={{ fontSize: 12, color: '#e53e3e', fontWeight: 600 }}>
-                        No Phone Available
-                      </span>
-                    )}
                   </div>
                 </div>
               ))}
@@ -487,6 +641,9 @@ const VolunteerViewPage = () => {
           </div>
         )}
 
+        {/* Tab Content */}
+        {activeTab === 'requests' && (
+          <>
         {/* Live Map Section */}
         <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 24, boxShadow: '0 4px 12px #e2e8f0' }}>
           <h2 style={{ color: '#2d3748', marginBottom: 16, fontSize: '1.5rem' }}>
@@ -498,106 +655,9 @@ const VolunteerViewPage = () => {
           <RequestsMap 
             onRequestSelect={(request) => {
               console.log('Selected request:', request);
-              // You can add a modal or sidebar to show request details
             }}
           />
         </div>
-        {/* Manual Location Modal */}
-        {showManualLocationPrompt && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'rgba(0,0,0,0.35)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            animation: 'fadeIn 0.2s',
-          }}>
-            <div style={{
-              background: '#fff',
-              borderRadius: 16,
-              padding: 32,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-              minWidth: 320,
-              maxWidth: '90vw',
-              textAlign: 'center',
-              animation: 'popIn 0.2s',
-            }}>
-                          <h2 style={{ marginBottom: 16 }}>Enter Your Location</h2>
-            <p style={{ marginBottom: 16 }}>We could not access your location automatically. Please enter your address <b>or</b> latitude and longitude manually.</p>
-            <div style={{ marginBottom: 16 }}>
-              <input
-                type="text"
-                value={manualAddress}
-                onChange={e => setManualAddress(e.target.value)}
-                placeholder="Enter your address (e.g. 123 Main St, City, Country)"
-                style={{ width: '100%', padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px', marginBottom: 8 }}
-              />
-              <div style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>Or enter coordinates below:</div>
-              <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
-                <input
-                  type="number"
-                  value={manualLat}
-                  onChange={e => setManualLat(e.target.value)}
-                  placeholder="Latitude (e.g. 23.8103)"
-                  step="any"
-                  style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
-                />
-                <input
-                  type="number"
-                  value={manualLng}
-                  onChange={e => setManualLng(e.target.value)}
-                  placeholder="Longitude (e.g. 90.4125)"
-                  step="any"
-                  style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 16, justifyContent: 'center' }}>
-              <button
-                className="btn btn-primary"
-                disabled={isGeocoding}
-                onClick={handleManualLocationSave}
-              >
-                {isGeocoding ? (
-                  <span className="spinner" style={{ marginRight: 8, border: '2px solid #fff', borderTop: '2px solid #3182ce', borderRadius: '50%', width: 16, height: 16, display: 'inline-block', animation: 'spin 1s linear infinite' }}></span>
-                ) : null}
-                Save Location
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => { setShowManualLocationPrompt(false); setManualAddress(''); }}
-                disabled={isGeocoding}
-              >
-                Cancel
-              </button>
-            </div>
-            </div>
-                          <style>{`
-                @keyframes fadeIn {
-                  from { opacity: 0; }
-                  to { opacity: 1; }
-                }
-                @keyframes popIn {
-                  from { transform: scale(0.95); opacity: 0; }
-                  to { transform: scale(1); opacity: 1; }
-                }
-                .spinner {
-                  border: 2px solid #e2e8f0;
-                  border-top: 2px solid #3182ce;
-                  border-radius: 50%;
-                  width: 16px;
-                  height: 16px;
-                  display: inline-block;
-                  animation: spin 1s linear infinite;
-                }
-              `}</style>
-          </div>
-        )}
 
         {/* Filter Controls */}
         <div style={{ 
@@ -717,15 +777,7 @@ const VolunteerViewPage = () => {
                         </span>
                       )}
                     </div>
-                    {/* Map for request location */}
-                    <div style={{ marginTop: 8 }}>
-                      <RequestLocationMap
-                        latitude={request.latitude}
-                        longitude={request.longitude}
-                        panic={request.panic}
-                        popupText={request.panic ? '🚨 Panic Alert' : request.title}
-                      />
-                    </div>
+
                     {/* Action Buttons */}
                     {request.status === 'pending' && (
                       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -943,179 +995,420 @@ const VolunteerViewPage = () => {
             ) : (
               <div style={{ textAlign: 'center', color: '#718096', padding: '2rem' }}>
                 <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>💬</div>
-          
                 <div>Select a request to view details and chat</div>
               </div>
             )}
           </div>
         </div>
+          </>
+        )}
 
-        {/* Donation Modal */}
-        {showDonationModal && (
+        {activeTab === 'shelters' && (
+          <div>
+            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Shelter Management</h2>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+              <button
+                onClick={openAddShelter}
+                style={{
+                  background: '#3182ce',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '8px 20px',
+                  fontWeight: 600,
+                  fontSize: 16,
+                  cursor: 'pointer'
+                }}
+              >
+                + Add Shelter
+              </button>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc' }}>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Name</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Capacity</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Occupied</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Available</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Status</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shelters.map(shelter => (
+                    <tr key={shelter.id}>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{shelter.name}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{shelter.capacity}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{shelter.occupied || 0}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{(shelter.capacity || 0) - (shelter.occupied || 0)}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{ 
+                          padding: '4px 12px', 
+                          borderRadius: 12, 
+                          fontSize: 12,
+                          backgroundColor: shelter.status === 'open' ? '#38a169' : '#e53e3e',
+                          color: '#fff',
+                          fontWeight: '600',
+                          textTransform: 'uppercase'
+                        }}>
+                          {shelter.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            onClick={() => openEditShelter(shelter)}
+                            style={{ 
+                              background: '#3182ce', 
+                              color: '#fff', 
+                              border: 'none', 
+                              borderRadius: 6, 
+                              padding: '6px 12px', 
+                              fontSize: 12,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteShelter(shelter.id)}
+                            style={{ 
+                              background: '#e53e3e', 
+                              color: '#fff', 
+                              border: 'none', 
+                              borderRadius: 6, 
+                              padding: '6px 12px', 
+                              fontSize: 12,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'shelter-requests' && (
+          <div>
+            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Shelter Requests</h2>
+            
+            {/* Simple: Just One Button */}
+            <div style={{ marginBottom: 20 }}>
+              <button
+                onClick={() => {
+                  try {
+                    // Simple: just get all data from localStorage
+                    const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
+                    console.log('Loading all bookings:', allBookings);
+                    
+                    if (allBookings.length === 0) {
+                      addNotification('No bookings found. Submit a booking first as a requester.', 'info');
+                      return;
+                    }
+                    
+                    setShelterRequests(allBookings);
+                    addNotification(`Loaded ${allBookings.length} booking(s)!`, 'success');
+                    
+                  } catch (error) {
+                    console.error('Error loading bookings:', error);
+                    addNotification('Failed to load bookings.', 'error');
+                  }
+                }}
+                style={{
+                  background: '#10b981',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '12px 24px',
+                  fontSize: '14px',
+                  cursor: 'pointer'
+                }}
+              >
+                📁 Load Bookings from File
+              </button>
+            </div>
+            
+            <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc' }}>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Requester</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Shelter</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>People</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Urgency</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Status</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shelterRequests.map(request => (
+                    <tr key={request.id}>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ fontWeight: 600 }}>{request.requesterName}</div>
+                        <div style={{ fontSize: 12, color: '#718096' }}>{request.requesterPhone}</div>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{request.shelterName}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{request.numberOfPeople}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{
+                          padding: '4px 8px',
+                          borderRadius: 8,
+                          fontSize: 12,
+                          backgroundColor: request.urgency === 'critical' ? '#e53e3e' : request.urgency === 'high' ? '#dd6b20' : '#d69e2e',
+                          color: '#fff',
+                          fontWeight: '600',
+                          textTransform: 'uppercase'
+                        }}>
+                          {request.urgency}
+                        </span>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{ 
+                          padding: '4px 12px', 
+                          borderRadius: 12, 
+                          fontSize: 12,
+                          backgroundColor: request.status === 'pending' ? '#d69e2e' : request.status === 'approved' ? '#38a169' : '#e53e3e',
+                          color: '#fff',
+                          fontWeight: '600',
+                          textTransform: 'uppercase'
+                        }}>
+                          {request.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        {request.status === 'pending' && (
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              onClick={() => handleAccept(request.id)}
+                              style={{ 
+                                background: '#38a169', 
+                                color: '#fff', 
+                                border: 'none', 
+                                borderRadius: 6, 
+                                padding: '6px 12px', 
+                                fontSize: 12,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleDecline(request.id)}
+                              style={{ 
+                                background: '#e53e3e', 
+                                color: '#fff', 
+                                border: 'none', 
+                                borderRadius: 6, 
+                                padding: '6px 12px', 
+                                fontSize: 12,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Manual Location Modal */}
+        {showManualLocationPrompt && (
           <div style={{
             position: 'fixed',
             top: 0,
             left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.5)',
+            width: '100vw',
+            height: '100vh',
+            background: 'rgba(0,0,0,0.35)',
+            zIndex: 9999,
             display: 'flex',
-            justifyContent: 'center',
             alignItems: 'center',
-            zIndex: 1000
+            justifyContent: 'center'
           }}>
             <div style={{
               background: '#fff',
               borderRadius: 16,
               padding: 32,
-              maxWidth: 500,
-              width: '90%',
-              maxHeight: '80vh',
-              overflow: 'auto'
+              minWidth: 320,
+              maxWidth: '90vw',
+              textAlign: 'center'
             }}>
-              <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.5rem', fontWeight: '600' }}>
-                Make a Donation
-              </h3>
-              
+              <h2 style={{ marginBottom: 16 }}>Enter Your Location</h2>
+              <p style={{ marginBottom: 16 }}>Please enter your address or coordinates</p>
+                <div style={{ marginBottom: 16 }}>
+                <input
+                  type="text"
+                  value={manualAddress}
+                  onChange={e => setManualAddress(e.target.value)}
+                  placeholder="Enter your address"
+                  style={{ width: '100%', padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px', marginBottom: 8 }}
+                />
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <input
+                    type="number"
+                    value={manualLat}
+                    onChange={e => setManualLat(e.target.value)}
+                    placeholder="Latitude"
+                    step="any"
+                    style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
+                  />
+                  <input
+                    type="number"
+                    value={manualLng}
+                    onChange={e => setManualLng(e.target.value)}
+                    placeholder="Longitude"
+                    step="any"
+                    style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 16, justifyContent: 'center' }}>
+                <button
+                  onClick={handleManualLocationSave}
+                  disabled={isGeocoding}
+                    style={{
+                    background: '#3182ce',
+                    color: '#fff',
+                    border: 'none',
+                      borderRadius: 8,
+                    padding: '12px 24px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '600'
+                  }}
+                >
+                  Save Location
+                </button>
+                <button
+                  onClick={() => setShowManualLocationPrompt(false)}
+                    style={{
+                    background: '#e2e8f0',
+                    color: '#4a5568',
+                    border: 'none',
+                      borderRadius: 8,
+                    padding: '12px 24px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '600'
+                    }}
+                >
+                  Cancel
+                </button>
+                </div>
+            </div>
+          </div>
+        )}
+
+        {/* Shelter Modal */}
+        {showShelterModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <form onSubmit={handleShelterSubmit} style={{ background: '#fff', borderRadius: 16, padding: 32, minWidth: 320, maxWidth: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+              <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.3rem', fontWeight: '600' }}>{editingShelter ? 'Edit Shelter' : 'Add Shelter'}</h3>
+                <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Name</label>
+                <input name="name" value={shelterForm.name} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Capacity</label>
+                <input name="capacity" type="number" value={shelterForm.capacity} onChange={handleShelterFormChange} required min={1} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Contact</label>
+                <input name="contact" value={shelterForm.contact} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Description</label>
+                <textarea name="description" value={shelterForm.description} onChange={handleShelterFormChange} rows={2} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              </div>
+              <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Latitude</label>
+                  <input name="lat" type="number" value={shelterForm.location.lat} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Longitude</label>
+                  <input name="lng" type="number" value={shelterForm.location.lng} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Status</label>
+                <select name="status" value={shelterForm.status} onChange={handleShelterFormChange} style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                  <option value="open">Open</option>
+                  <option value="closed">Closed</option>
+                  <option value="limited">Limited</option>
+                  <option value="full">Full</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                <button type="button" onClick={closeShelterModal} style={{ background: '#e2e8f0', color: '#2d3748', border: 'none', borderRadius: 6, padding: '8px 18px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" style={{ background: '#3182ce', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 18px', fontWeight: 600, cursor: 'pointer' }}>{editingShelter ? 'Update' : 'Add'}</button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Donation Modal */}
+        {showDonationModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+            <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 500, width: '90%', maxHeight: '80vh', overflow: 'auto' }}>
+              <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.5rem', fontWeight: '600' }}>Make a Donation</h3>
               <form onSubmit={handleDonationSubmit}>
                 <div style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>
-                    Donation Type *
-                  </label>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Donation Type</label>
                   <select
                     value={donationForm.type}
                     onChange={(e) => setDonationForm(prev => ({ ...prev, type: e.target.value }))}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 8,
-                      fontSize: '14px'
-                    }}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
                   >
-                    <option value="monetary">Monetary Donation</option>
+                    <option value="monetary">Monetary</option>
                     <option value="goods">Goods/Items</option>
                     <option value="services">Services</option>
                   </select>
                 </div>
-
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>
-                    Title *
-                  </label>
-                  <input
+                  <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Title</label>
+                    <input
                     type="text"
                     value={donationForm.title}
                     onChange={(e) => setDonationForm(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="Brief description of your donation"
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 8,
-                      fontSize: '14px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>
-                    Category
-                  </label>
-                  <select
-                    value={donationForm.category}
-                    onChange={(e) => setDonationForm(prev => ({ ...prev, category: e.target.value }))}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 8,
-                      fontSize: '14px'
-                    }}
-                  >
-                    <option value="general">General</option>
-                    <option value="medical">Medical</option>
-                    <option value="food">Food</option>
-                    <option value="shelter">Shelter</option>
-                    <option value="transport">Transport</option>
-                    <option value="clothing">Clothing</option>
-                  </select>
-                </div>
-
-                {donationForm.type === 'monetary' && (
-                  <div style={{ marginBottom: 16 }}>
-                    <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>
-                      Amount ($)
-                    </label>
-                    <input
-                      type="number"
-                      value={donationForm.amount}
-                      onChange={(e) => setDonationForm(prev => ({ ...prev, amount: e.target.value }))}
-                      placeholder="0.00"
-                      min="0"
-                      step="0.01"
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: 8,
-                        fontSize: '14px'
-                      }}
+                    placeholder="Brief description"
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
                     />
                   </div>
-                )}
-
-                <div style={{ marginBottom: 24 }}>
-                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>
-                    Description *
-                  </label>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Description</label>
                   <textarea
                     value={donationForm.description}
                     onChange={(e) => setDonationForm(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="Detailed description of your donation..."
+                    placeholder="Detailed description..."
                     rows={4}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 8,
-                      fontSize: '14px',
-                      resize: 'vertical'
-                    }}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
                   />
                 </div>
-
                 <div style={{ display: 'flex', gap: 12 }}>
                   <button
                     type="submit"
-                    style={{
-                      flex: 1,
-                      background: '#38a169',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: 8,
-                      padding: '12px 24px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600'
-                    }}
+                    style={{ flex: 1, background: '#38a169', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 24px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
                   >
                     Submit Donation
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowDonationModal(false)}
-                    style={{
-                      flex: 1,
-                      background: '#e2e8f0',
-                      color: '#4a5568',
-                      border: 'none',
-                      borderRadius: 8,
-                      padding: '12px 24px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600'
-                    }}
+                    style={{ flex: 1, background: '#e2e8f0', color: '#4a5568', border: 'none', borderRadius: 8, padding: '12px 24px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
                   >
                     Cancel
                   </button>
