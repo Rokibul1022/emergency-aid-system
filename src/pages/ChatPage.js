@@ -137,7 +137,7 @@ const ChatPage = () => {
     <div className="page-container" style={{ background: '#f7f9fb', minHeight: '100vh', padding: '40px 0' }}>
       <h1 style={{ color: '#2d3748', textAlign: 'center', marginBottom: 32 }}>{t('chat.title') || 'Chat'}</h1>
       <div style={{ display: 'flex', gap: 32, maxWidth: 1200, margin: '0 auto', height: '70vh' }}>
-        <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px #e2e8f0',overflowY: 'auto', maxHeight: '100%' ,minHeight: 0}}>
           <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Conversations</h2>
           {conversations.length === 0 && (
             <div style={{ color: '#888' }}>No conversations yet.</div>
