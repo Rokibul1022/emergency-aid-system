@@ -168,6 +168,7 @@ const VolunteerViewPage = () => {
 
   // Subscribe to real-time requests
   useEffect(() => {
+    if (!user || !user.uid || !userData) return;
     const unsubscribe = subscribeToRequests((requestsData) => {
       // Calculate distances if user location is available
       const requestsWithDistance = requestsData.map(request => {
@@ -182,13 +183,11 @@ const VolunteerViewPage = () => {
         }
         return { ...request, distance: null };
       });
-      
       setRequests(requestsWithDistance);
       setLoading(false);
     });
-
     return () => unsubscribe();
-  }, [userLocation]);
+  }, [user, userData, userLocation]);
 
   // Subscribe to chat when a request is selected
   useEffect(() => {

@@ -30,7 +30,7 @@ import RequestsMap from '../components/RequestsMap';
 const AdminPanelPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
-  const { user } = useAuth();
+  const { user, userData } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [users, setUsers] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -49,6 +49,7 @@ const AdminPanelPage = () => {
 
   // Load all data
   useEffect(() => {
+    if (!user || !user.uid || !userData) return;
     const loadAdminData = async () => {
       try {
         setLoading(true);
@@ -91,7 +92,7 @@ const AdminPanelPage = () => {
     if (user) {
       loadAdminData();
     }
-  }, [user]);
+  }, [user, userData]);
 
   // Subscribe to real-time updates
   useEffect(() => {
