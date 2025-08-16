@@ -160,22 +160,24 @@ export const AuthProvider = ({ children }) => {
 
   const signup = async (email, password, displayName, role = USER_ROLES.REQUESTER, phone = '') => {
     dispatch({ type: 'AUTH_START' });
-    
     try {
       const result = await signUpWithEmail(email, password, displayName, role, { phone });
       let userData = await getCurrentUserData(result.user.uid);
-      
-      // If user data doesn't exist, create it
       if (!userData) {
         await updateUserProfile(result.user.uid, { role, phone });
         userData = await getCurrentUserData(result.user.uid);
       }
-      
       dispatch({
         type: 'AUTH_SUCCESS',
         payload: { user: result.user, userData },
       });
-      
+      // Refetch userData to ensure latest info
+      setTimeout(async () => {
+        const refreshedUserData = await getCurrentUserData(result.user.uid);
+        if (refreshedUserData) {
+          dispatch({ type: 'UPDATE_USER_DATA', payload: refreshedUserData });
+        }
+      }, 500);
       return { success: true };
     } catch (error) {
       console.error('Signup failed:', error);
@@ -186,12 +188,9 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     dispatch({ type: 'AUTH_START' });
-    
     try {
       const user = await signInWithEmail(email, password);
       let userData = await getCurrentUserData(user.uid);
-      
-      // If no userData, create basic userData
       if (!userData) {
         userData = {
           displayName: user.displayName || user.email?.split('@')[0] || 'User',
@@ -203,12 +202,17 @@ export const AuthProvider = ({ children }) => {
           phone: ''
         };
       }
-      
       dispatch({
         type: 'AUTH_SUCCESS',
         payload: { user, userData },
       });
-      
+      // Refetch userData to ensure latest info
+      setTimeout(async () => {
+        const refreshedUserData = await getCurrentUserData(user.uid);
+        if (refreshedUserData) {
+          dispatch({ type: 'UPDATE_USER_DATA', payload: refreshedUserData });
+        }
+      }, 500);
       return { success: true };
     } catch (error) {
       console.error('Login failed:', error);

@@ -76,73 +76,61 @@ const DashboardPage = () => {
   };
 
   useEffect(() => {
+    // Wait for user and userData to be loaded before fetching dashboard data
+    if (!user || !user.uid || !userData) return;
     const loadDashboardData = async () => {
       try {
         setLoading(true);
         console.log('=== DASHBOARD DATA LOADING START ===');
         console.log('User ID:', user?.uid);
         console.log('Role:', role || userData?.role);
-        
-        if (user && user.uid) {
-          const effectiveRole = role || userData?.role || 'requester';
-          
-          if (effectiveRole === 'requester') {
-            // Fetch all requests, then filter by requesterId
-            const { getOpenRequests } = await import('../firebase/requests');
-            const allRequests = await getOpenRequests(500); // get more if needed
-            const userRequests = allRequests.filter(req => req.requesterId === user.uid);
-            // Calculate stats
-            const pendingRequests = userRequests.filter(req => req.status === 'pending');
-            const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-            const completedRequests = userRequests.filter(req => req.status === 'resolved');
-            const newStats = {
-              requests: userRequests.length,
-              active: activeRequests.length,
-              completed: completedRequests.length,
-              pending: pendingRequests.length,
-            };
-            setStats(newStats);
-            setRecentRequests(userRequests.slice(0, 5));
-          } else if (effectiveRole === 'volunteer') {
-            const assignedRequests = await getRequestsByVolunteer(user.uid);
-            const { getOpenRequests } = await import('../firebase/requests');
-            const allRequests = await getOpenRequests(100);
-            const nearbyPendingRequests = allRequests.filter(req => req.status === 'pending');
-            const userRequests = [...assignedRequests, ...nearbyPendingRequests];
-            
-            // Calculate stats
-            const pendingRequests = userRequests.filter(req => req.status === 'pending');
-            const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-            const completedRequests = userRequests.filter(req => req.status === 'resolved');
-            
-            const newStats = {
-              requests: userRequests.length,
-              active: activeRequests.length,
-              completed: completedRequests.length,
-              pending: pendingRequests.length,
-            };
-            
-            setStats(newStats);
-            setRecentRequests(userRequests.slice(0, 5));
-          } else if (effectiveRole === 'admin') {
-            const { getOpenRequests } = await import('../firebase/requests');
-            const userRequests = await getOpenRequests(100);
-            
-            // Calculate stats
-            const pendingRequests = userRequests.filter(req => req.status === 'pending');
-            const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-            const completedRequests = userRequests.filter(req => req.status === 'resolved');
-            
-            const newStats = {
-              requests: userRequests.length,
-              active: activeRequests.length,
-              completed: completedRequests.length,
-              pending: pendingRequests.length,
-            };
-            
-            setStats(newStats);
-            setRecentRequests(userRequests.slice(0, 5));
-          }
+        const effectiveRole = role || userData?.role || 'requester';
+        if (effectiveRole === 'requester') {
+          const { getOpenRequests } = await import('../firebase/requests');
+          const allRequests = await getOpenRequests(500);
+          const userRequests = allRequests.filter(req => req.requesterId === user.uid);
+          const pendingRequests = userRequests.filter(req => req.status === 'pending');
+          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+          const completedRequests = userRequests.filter(req => req.status === 'resolved');
+          const newStats = {
+            requests: userRequests.length,
+            active: activeRequests.length,
+            completed: completedRequests.length,
+            pending: pendingRequests.length,
+          };
+          setStats(newStats);
+          setRecentRequests(userRequests.slice(0, 5));
+        } else if (effectiveRole === 'volunteer') {
+          const assignedRequests = await getRequestsByVolunteer(user.uid);
+          const { getOpenRequests } = await import('../firebase/requests');
+          const allRequests = await getOpenRequests(100);
+          const nearbyPendingRequests = allRequests.filter(req => req.status === 'pending');
+          const userRequests = [...assignedRequests, ...nearbyPendingRequests];
+          const pendingRequests = userRequests.filter(req => req.status === 'pending');
+          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+          const completedRequests = userRequests.filter(req => req.status === 'resolved');
+          const newStats = {
+            requests: userRequests.length,
+            active: activeRequests.length,
+            completed: completedRequests.length,
+            pending: pendingRequests.length,
+          };
+          setStats(newStats);
+          setRecentRequests(userRequests.slice(0, 5));
+        } else if (effectiveRole === 'admin') {
+          const { getOpenRequests } = await import('../firebase/requests');
+          const userRequests = await getOpenRequests(100);
+          const pendingRequests = userRequests.filter(req => req.status === 'pending');
+          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+          const completedRequests = userRequests.filter(req => req.status === 'resolved');
+          const newStats = {
+            requests: userRequests.length,
+            active: activeRequests.length,
+            completed: completedRequests.length,
+            pending: pendingRequests.length,
+          };
+          setStats(newStats);
+          setRecentRequests(userRequests.slice(0, 5));
         }
       } catch (error) {
         console.error('Error loading dashboard data:', error);
@@ -150,7 +138,6 @@ const DashboardPage = () => {
         setLoading(false);
       }
     };
-
     loadDashboardData();
   }, [user, userData, role]);
 
