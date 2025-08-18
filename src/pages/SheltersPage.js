@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { subscribeToShelters, getAvailableShelters } from '../firebase/shelters';
 import { createShelterRequest, getShelterRequestsByRequester, subscribeToShelterRequests } from '../firebase/shelterRequests';
 import { db } from '../firebase/config';
+import BookingBuilder from '../utils/BookingBuilder';
 
 // Default facilities for shelters
 const defaultFacilities = ['Medical', 'Food', 'Showers', 'Beds', 'Security'];
@@ -151,8 +152,8 @@ const SheltersPage = () => {
   const handleGetDirections = (shelter) => {
     if (shelter.location) {
       const url = `https://www.google.com/maps/dir/?api=1&destination=${shelter.location.lat},${shelter.location.lng}`;
-    window.open(url, '_blank');
-    addNotification(`Opening directions to ${shelter.name}`, 'info');
+      window.open(url, '_blank');
+      addNotification(`Opening directions to ${shelter.name}`, 'info');
     } else {
       addNotification('Location not available for this shelter', 'warning');
     }
@@ -184,22 +185,14 @@ const SheltersPage = () => {
     setSubmitting(true);
     
     try {
-      const bookingData = {
-        id: `booking_${Date.now()}`,
-        requesterId: user.uid,
-        requesterName: userData?.displayName || userData?.name || 'Anonymous',
-        requesterPhone: userData?.phone || 'N/A',
-        requesterEmail: user.email,
-        shelterId: selectedShelter.id,
-        shelterName: selectedShelter.name,
-        numberOfPeople: parseInt(bookingForm.numberOfPeople),
-        urgency: bookingForm.urgency,
-        specialNeeds: bookingForm.specialNeeds,
-        estimatedDuration: parseInt(bookingForm.estimatedDuration),
-        notes: bookingForm.notes,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      };
+      const bookingData = new BookingBuilder(user, selectedShelter)
+        .withUserData(userData)
+        .withNumberOfPeople(bookingForm.numberOfPeople)
+        .withUrgency(bookingForm.urgency)
+        .withSpecialNeeds(bookingForm.specialNeeds)
+        .withEstimatedDuration(bookingForm.estimatedDuration)
+        .withNotes(bookingForm.notes)
+        .build();
 
       console.log('Storing booking in text file:', bookingData);
       
@@ -770,14 +763,14 @@ const SheltersPage = () => {
                       <div>
                         <div style={{ fontSize: '12px', color: '#718096', marginBottom: 4 }}>Requested On</div>
                         <div style={{ fontWeight: '600' }}>
-                          {new Date(booking.createdAt?.seconds ? booking.createdAt.seconds * 1000 : Date.now()).toLocaleDateString()}
+                          {new Date(booking.createdAt?.seconds ? booking.createdAt.seconds * 1000 : booking.createdAt).toLocaleDateString()}
                         </div>
                       </div>
                       {booking.assignedAt && (
                         <div>
                           <div style={{ fontSize: '12px', color: '#718096', marginBottom: 4 }}>Assigned On</div>
                           <div style={{ fontWeight: '600' }}>
-                            {new Date(booking.assignedAt?.seconds ? booking.assignedAt.seconds * 1000 : Date.now()).toLocaleDateString()}
+                            {new Date(booking.assignedAt?.seconds ? booking.assignedAt.seconds * 1000 : booking.assignedAt).toLocaleDateString()}
                           </div>
                         </div>
                       )}
@@ -1259,4 +1252,4 @@ const SheltersPage = () => {
   );
 };
 
-export default SheltersPage; 
+export default SheltersPage;
