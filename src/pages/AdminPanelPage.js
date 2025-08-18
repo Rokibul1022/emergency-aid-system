@@ -1,4 +1,35 @@
-  // Dashboard tab content renderer
+
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
+import { 
+  getAllUsers, 
+  updateUserRole, 
+  getUsersByRole,
+  USER_ROLES 
+} from '../firebase/auth';
+import { 
+  getRequestsByStatus, 
+  updateRequestStatus, 
+  deleteRequest,
+  subscribeToRequests,
+  REQUEST_STATUS,
+  REQUEST_CATEGORIES,
+  assignVolunteerToRequest
+} from '../firebase/requests';
+import { 
+  getAllShelters, 
+  createShelter, 
+  updateShelter, 
+  deleteShelter 
+} from '../firebase/shelters';
+import { subscribeToActivePanicAlerts } from '../firebase/alerts';
+import RequestLocationMap from '../components/common/RequestLocationMap';
+import RequestsMap from '../components/RequestsMap';
+
+
+// Dashboard tab content renderer
   const renderDashboard = (stats) => (
     <div>
       <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>System Overview</h2>
@@ -32,34 +63,6 @@
     </div>
   );
 
-import React, { useState, useEffect } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useApp } from '../contexts/AppContext';
-import { useAuth } from '../contexts/AuthContext';
-import { 
-  getAllUsers, 
-  updateUserRole, 
-  getUsersByRole,
-  USER_ROLES 
-} from '../firebase/auth';
-import { 
-  getRequestsByStatus, 
-  updateRequestStatus, 
-  deleteRequest,
-  subscribeToRequests,
-  REQUEST_STATUS,
-  REQUEST_CATEGORIES,
-  assignVolunteerToRequest
-} from '../firebase/requests';
-import { 
-  getAllShelters, 
-  createShelter, 
-  updateShelter, 
-  deleteShelter 
-} from '../firebase/shelters';
-import { subscribeToActivePanicAlerts } from '../firebase/alerts';
-import RequestLocationMap from '../components/common/RequestLocationMap';
-import RequestsMap from '../components/RequestsMap';
 
 // Helper: Get icon for request category
 const getCategoryIcon = (category) => {
