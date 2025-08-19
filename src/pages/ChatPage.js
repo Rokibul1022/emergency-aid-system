@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+ import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { subscribeToRequests } from '../firebase/requests';
 import { sendMessage, subscribeToChat, setUserOnline, setUserOffline, subscribeToOnlineUsers } from '../firebase/chat';
+import { RequestDataManager, MessageDataManager, OnlineUsersDataManager } from '../utils/ChatDataManager';
 
 const ChatPage = () => {
   const { t } = useTranslation();
@@ -16,54 +17,20 @@ const ChatPage = () => {
   const [newMessage, setNewMessage] = useState('');
   const [onlineUsers, setOnlineUsers] = useState([]);
   const messagesEndRef = useRef(null);
+  const requestManagerRef = useRef(null);
+  const onlineUsersManagerRef = useRef(null);
+  const messageManagerRef = useRef(null);
 
-  // Build conversations list from requests depending on role
-  useEffect(() => {
-    const unsubscribe = subscribeToRequests((requests) => {
-      const filtered = requests.filter((req) => {
-        if (!user?.uid) return false;
-        if (role === 'admin') return true;
-        if (role === 'volunteer') {
-          // Volunteers can see requests they're assigned to OR pending requests they can help with
-          return req.assignedVolunteer === user.uid || 
-                 (req.status === 'pending' || req.status === 'in-progress');
-        }
-        // requester
-        return req.requesterId === user.uid;
-      });
-
-      const mapped = filtered.map((req) => ({
-        id: req.id,
-        title: `${req.title || 'Request'} - ${req?.contact?.name || 'User'}`,
-        lastMessage: req.description || '',
-        timestamp: req.timestamp?.toDate ? req.timestamp.toDate().getTime() : Date.now(),
-        unread: 0,
-        raw: req,
-        status: req.status,
-        isAssigned: req.assignedVolunteer === user?.uid,
-      }));
-      setConversations(mapped);
-    });
-
-    return () => unsubscribe && unsubscribe();
-  }, [user?.uid, role]);
-
-  // Handle online status
+  // Initialize subscriptions for requests and online users
   useEffect(() => {
     if (!user?.uid || !userData) return;
 
-    // Set user online when entering chat
-    const setOnline = async () => {
-      try {
-        await setUserOnline(user.uid, userData);
-      } catch (error) {
-        console.error('Failed to set user online:', error);
-      }
-    };
-    setOnline();
+    requestManagerRef.current = new RequestDataManager(user.uid, role, userData, subscribeToRequests);
+    onlineUsersManagerRef.current = new OnlineUsersDataManager(user.uid, role, userData, subscribeToOnlineUsers, setUserOnline);
 
-    // Subscribe to online users
-    const unsubscribeOnline = subscribeToOnlineUsers(setOnlineUsers);
+    // Subscribe to requests and online users
+    const unsubscribeRequests = requestManagerRef.current.subscribeToData(setConversations);
+    const unsubscribeOnlineUsers = onlineUsersManagerRef.current.subscribeToData(setOnlineUsers);
 
     // Update last seen periodically
     const interval = setInterval(async () => {
@@ -76,33 +43,31 @@ const ChatPage = () => {
 
     // Cleanup on unmount
     return () => {
-      unsubscribeOnline && unsubscribeOnline();
+      unsubscribeRequests();
+      unsubscribeOnlineUsers();
       clearInterval(interval);
       // Set user offline when leaving
       setUserOffline(user.uid).catch(console.error);
     };
-  }, [user?.uid, userData]);
+  }, [user?.uid, userData, role]);
 
   // Subscribe to messages for selected conversation
   useEffect(() => {
     if (!selectedConversation) return;
 
-    const requestId = selectedConversation.id;
-    const unsubscribe = subscribeToChat(requestId, (msgs) => {
-      setMessagesByConversation((prev) => ({
-        ...prev,
-        [requestId]: msgs.map((m) => ({
-          ...m,
-          // Normalize for UI
-          sender: m.senderName || m.senderId || 'User',
-          timestamp: m.timestamp instanceof Date ? m.timestamp.getTime() : m.timestamp,
-        })),
-      }));
-      // Auto scroll
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    messageManagerRef.current = new MessageDataManager(user.uid, role, userData, selectedConversation.id, subscribeToChat);
+
+    const unsubscribeMessages = messageManagerRef.current.subscribeToData(({ requestId, messages }) => {
+      if (requestId === selectedConversation.id) {
+        setMessagesByConversation((prev) => ({
+          ...prev,
+          [requestId]: messages,
+        }));
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      }
     });
 
-    return () => unsubscribe && unsubscribe();
+    return unsubscribeMessages;
   }, [selectedConversation]);
 
   const handleSendMessage = async () => {
