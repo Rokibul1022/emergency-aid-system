@@ -2,6 +2,100 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './EmergencyResourcesPage.css';
 
+   // ADAPTER PATTERN
+
+// Base "interface" 
+class ResourceAdapter {
+  canDownload(resource) { return false; }
+  async exists(resource) { return false; }
+  download(resource) { return false; }
+  open(resource) { return false; }
+}
+
+// Handles same-origin PDF files in /public/resources
+class PdfResourceAdapter extends ResourceAdapter {
+  canDownload(resource) {
+    return Boolean(resource?.downloadUrl && resource.downloadUrl !== '#');
+  }
+
+  async exists(resource) {
+    if (!this.canDownload(resource)) return false;
+    try {
+      const res = await fetch(resource.downloadUrl, { method: 'HEAD' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  download(resource) {
+    if (!this.canDownload(resource)) return false;
+    const link = document.createElement('a');
+    link.href = resource.downloadUrl;
+    link.download = resource.title.replace(/\s+/g, '_') + '.pdf';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return true;
+  }
+
+  open(resource) {
+    if (!this.canDownload(resource)) return false;
+    window.open(resource.downloadUrl, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+}
+
+// Handles external http(s) links (e.g., Google Docs, websites)
+class LinkResourceAdapter extends ResourceAdapter {
+  canDownload(resource) {
+    return Boolean(resource?.downloadUrl && /^https?:\/\//i.test(resource.downloadUrl));
+  }
+
+  async exists(resource) {
+    if (!this.canDownload(resource)) return false;
+  
+    try {
+      const res = await fetch(resource.downloadUrl, { method: 'HEAD', mode: 'no-cors' });
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  download(resource) {
+    
+    return this.open(resource);
+  }
+
+  open(resource) {
+    if (!this.canDownload(resource)) return false;
+    window.open(resource.downloadUrl, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+}
+
+
+class UnavailableResourceAdapter extends ResourceAdapter {
+  canDownload() { return false; }
+  async exists() { return false; }
+  download() { return false; }
+  open() { return false; }
+}
+
+// Simple factory function that returns the proper adapter for a resource
+function getResourceAdapter(resource) {
+  const url = resource?.downloadUrl || '';
+  const ext = url.split('.').pop()?.toLowerCase();
+
+  if (resource?.type === 'PDF' || ext === 'pdf') return new PdfResourceAdapter();
+  if (/^https?:\/\//i.test(url)) return new LinkResourceAdapter();
+
+  return new UnavailableResourceAdapter();
+}
+
+
+
 const EmergencyResourcesPage = () => {
   const { t } = useTranslation();
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -36,7 +130,7 @@ const EmergencyResourcesPage = () => {
       icon: '🏕️',
       type: 'PDF',
       size: '3.1 MB',
-      downloadUrl: '/resources/Survival%20Guide.pdf', // Fixed case and space
+      downloadUrl: '/resources/Survival%20Guide.pdf', 
     },
     {
       id: 4,
@@ -78,34 +172,31 @@ const EmergencyResourcesPage = () => {
     { id: 'contacts', label: t('resources.contacts'), icon: '📞' },
   ];
 
-  const filteredResources = selectedCategory === 'all' 
-    ? resources 
-    : resources.filter(resource => resource.category === selectedCategory);
+  const filteredResources =
+    selectedCategory === 'all'
+      ? resources
+      : resources.filter((resource) => resource.category === selectedCategory);
 
+  // use the adapter in handlers
   const handleDownload = (resource) => {
-    if (resource.downloadUrl && resource.downloadUrl !== '#') {
-      const link = document.createElement('a');
-      link.href = resource.downloadUrl;
-      link.download = resource.title.replace(/\s+/g, '_') + '.pdf';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } else {
+    const adapter = getResourceAdapter(resource);
+    if (!adapter.canDownload(resource)) {
       alert('Download not available.');
+      return;
     }
+    const ok = adapter.download(resource);
+    if (!ok) alert('Could not start download.');
   };
 
   const handleView = async (resource) => {
-    if (!resource.downloadUrl || resource.downloadUrl === '#') {
-      alert('View not available.');
-      return;
-    }
+    const adapter = getResourceAdapter(resource);
     setViewLoadingId(resource.id);
     try {
-      const res = await fetch(resource.downloadUrl, { method: 'HEAD' });
+      const ok = await adapter.exists(resource);
       setViewLoadingId(null);
-      if (res.ok) {
-        window.open(resource.downloadUrl, '_blank', 'noopener,noreferrer');
+      if (ok) {
+        const opened = adapter.open(resource);
+        if (!opened) alert('Could not open the file/link.');
       } else {
         alert('File not found. Please contact support.');
       }
@@ -145,40 +236,42 @@ const EmergencyResourcesPage = () => {
           <div style={{ color: '#888', fontStyle: 'italic', textAlign: 'center', padding: 40 }}>
             No resources found for this category.
           </div>
-        ) : filteredResources.map((resource) => (
-          <div key={resource.id} className="resource-card">
-            <div className="resource-header">
-              <div className="resource-icon">{resource.icon}</div>
-              <div className="resource-meta">
-                <span className="resource-type">{resource.type}</span>
-                <span className="resource-size">{resource.size}</span>
+        ) : (
+          filteredResources.map((resource) => (
+            <div key={resource.id} className="resource-card">
+              <div className="resource-header">
+                <div className="resource-icon">{resource.icon}</div>
+                <div className="resource-meta">
+                  <span className="resource-type">{resource.type}</span>
+                  <span className="resource-size">{resource.size}</span>
+                </div>
+              </div>
+              <div className="resource-content">
+                <h3 className="resource-title">{resource.title}</h3>
+                <p className="resource-description">{resource.description}</p>
+              </div>
+              <div className="resource-actions">
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleDownload(resource)}
+                  aria-label={`Download ${resource.title}`}
+                >
+                  <span className="btn-icon">⬇️</span>
+                  {t('resources.download') || 'Download'}
+                </button>
+                <button
+                  className="btn btn-outline"
+                  onClick={() => handleView(resource)}
+                  aria-label={`View ${resource.title}`}
+                  disabled={viewLoadingId === resource.id}
+                >
+                  <span className="btn-icon">👁️</span>
+                  {viewLoadingId === resource.id ? 'Loading...' : (t('resources.view') || 'View')}
+                </button>
               </div>
             </div>
-            <div className="resource-content">
-              <h3 className="resource-title">{resource.title}</h3>
-              <p className="resource-description">{resource.description}</p>
-            </div>
-            <div className="resource-actions">
-              <button
-                className="btn btn-primary"
-                onClick={() => handleDownload(resource)}
-                aria-label={`Download ${resource.title}`}
-              >
-                <span className="btn-icon">⬇️</span>
-                {t('resources.download') || 'Download'}
-              </button>
-              <button
-                className="btn btn-outline"
-                onClick={() => handleView(resource)}
-                aria-label={`View ${resource.title}`}
-                disabled={viewLoadingId === resource.id}
-              >
-                <span className="btn-icon">👁️</span>
-                {viewLoadingId === resource.id ? 'Loading...' : (t('resources.view') || 'View')}
-              </button>
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
 
       {/* Quick Tips Section */}
@@ -222,7 +315,6 @@ const EmergencyResourcesPage = () => {
       <div className="emergency-numbers">
         <h2>📞 Emergency Contact Numbers</h2>
         <div className="numbers-grid">
-          {/* Police */}
           <div className="number-card">
             <div className="number-icon">🚔</div>
             <h3>Police</h3>
@@ -233,7 +325,6 @@ const EmergencyResourcesPage = () => {
               <a href="sms:999" className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }}>SMS Now</a>
             </div>
           </div>
-          {/* Ambulance */}
           <div className="number-card">
             <div className="number-icon">🚑</div>
             <h3>Ambulance</h3>
@@ -244,7 +335,6 @@ const EmergencyResourcesPage = () => {
               <a href="sms:999" className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }}>SMS Now</a>
             </div>
           </div>
-          {/* Fire Department */}
           <div className="number-card">
             <div className="number-icon">🚒</div>
             <h3>Fire Department</h3>
@@ -255,7 +345,6 @@ const EmergencyResourcesPage = () => {
               <a href="sms:999" className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }}>SMS Now</a>
             </div>
           </div>
-          {/* Coast Guard */}
           <div className="number-card">
             <div className="number-icon">🌊</div>
             <h3>Coast Guard</h3>
@@ -272,4 +361,4 @@ const EmergencyResourcesPage = () => {
   );
 };
 
-export default EmergencyResourcesPage; 
+export default EmergencyResourcesPage;
