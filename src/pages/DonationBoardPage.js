@@ -1,9 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 
-// Mock donations data
+
+   // TEMPLATE METHOD PATTERN
+class DonationMatchTemplate {
+  // Final algorithm 
+  match(donation, requests) {
+    const candidates = this.filterCandidates(donation, requests);
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+    const scored = candidates.map((r) => ({
+      request: r,
+      score: this.score(donation, r),
+    }));
+
+    const selected = this.select(scored);
+    return selected ? selected.request : null;
+  }
+
+  // Hooks to customize
+  filterCandidates(_donation, _requests) {
+    throw new Error('filterCandidates() must be implemented by subclass');
+  }
+
+  score(_donation, _request) {
+    // default: treat all candidates equally
+    return 1;
+  }
+
+  select(scoredList) {
+    // default: highest score wins (ties keep first)
+    const sorted = [...scoredList].sort((a, b) => b.score - a.score);
+    return sorted[0] || null;
+  }
+}
+
+// Concrete implementation we use now: match by category
+class CategoryMatch extends DonationMatchTemplate {
+  filterCandidates(donation, requests) {
+    return requests.filter(
+      (r) => r.status === 'open' && r.category === donation.category
+    );
+  }
+}
+
+   // Mock Requests (for demo).
+
+const mockRequests = [
+  { id: 101, title: 'Need medical kits in Ward 12', category: 'Medical', description: 'bandages and first aid', status: 'open', requestedBy: 'Clinic Admin', contact: '+111111111' },
+  { id: 102, title: 'Food for flood-affected families', category: 'Food & Water', description: 'rice, lentils, clean water', status: 'open', requestedBy: 'Relief Team A', contact: '+222222222' },
+  { id: 103, title: 'Warm clothing required', category: 'Shelter', description: 'blankets, jackets', status: 'open', requestedBy: 'Community Center', contact: '+333333333' },
+  { id: 104, title: 'Transport needed', category: 'Transport', description: 'van or truck', status: 'open', requestedBy: 'Logistics Hub', contact: '+444444444' },
+];
+
+// Mock donations data 
 const mockDonations = [
   {
     id: 1,
@@ -50,6 +102,7 @@ const DonationBoardPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
   const { user } = useAuth();
+
   const [donations, setDonations] = useState(mockDonations);
   const [showPostForm, setShowPostForm] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -63,6 +116,8 @@ const DonationBoardPage = () => {
     contact: user?.phone || '',
   });
 
+  
+
   const handlePostDonation = (e) => {
     e.preventDefault();
     const donation = {
@@ -72,7 +127,20 @@ const DonationBoardPage = () => {
       status: 'available',
       timestamp: Date.now(),
     };
-    setDonations(prev => [donation, ...prev]);
+
+    // Auto-match using Template Method
+    try {
+      const matcher = new CategoryMatch();
+      const matched = matcher.match(donation, mockRequests);
+      if (matched) {
+        donation.status = 'matched';
+        donation.matchedRequest = matched;
+      }
+    } catch {
+      // ignore matching errors; donation stays 'available'
+    }
+
+    setDonations((prev) => [donation, ...prev]);
     setNewDonation({
       title: '',
       category: '',
@@ -86,11 +154,11 @@ const DonationBoardPage = () => {
   };
 
   const handleClaimDonation = (id) => {
-    setDonations(prev => prev.map(d => 
-      d.id === id 
-        ? { ...d, status: 'claimed', claimedBy: user?.name || 'Anonymous' }
-        : d
-    ));
+    setDonations((prev) =>
+      prev.map((d) =>
+        d.id === id ? { ...d, status: 'claimed', claimedBy: user?.name || 'Anonymous' } : d
+      )
+    );
     addNotification('Donation claimed successfully!', 'success');
   };
 
@@ -98,10 +166,13 @@ const DonationBoardPage = () => {
     addNotification(`Contact ${donation.donor} at ${donation.contact}`, 'info');
   };
 
-  const filteredDonations = donations.filter(donation => {
+  
+
+  const filteredDonations = donations.filter((donation) => {
     const matchesCategory = selectedCategory === 'All' || donation.category === selectedCategory;
-    const matchesSearch = donation.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         donation.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch =
+      donation.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      donation.description.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;
   });
 
@@ -114,9 +185,14 @@ const DonationBoardPage = () => {
     return `${days} day${days > 1 ? 's' : ''} ago`;
   };
 
+  
+
   return (
     <div className="page-container" style={{ background: '#f7f9fb', minHeight: '100vh', padding: '40px 0' }}>
-      <h1 style={{ color: '#2d3748', textAlign: 'center', marginBottom: 32 }}>{t('donations.title') || 'Donation Board'}</h1>
+      <h1 style={{ color: '#2d3748', textAlign: 'center', marginBottom: 32 }}>
+        {t('donations.title') || 'Donation Board'}
+      </h1>
+
       {/* Controls */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -138,12 +214,15 @@ const DonationBoardPage = () => {
             onChange={(e) => setSelectedCategory(e.target.value)}
             style={{ padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
           >
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
             ))}
           </select>
         </div>
       </div>
+
       {/* Post Donation Form */}
       {showPostForm && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
@@ -155,7 +234,7 @@ const DonationBoardPage = () => {
                 <input
                   type="text"
                   value={newDonation.title}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, title: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, title: e.target.value }))}
                   required
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 />
@@ -164,13 +243,15 @@ const DonationBoardPage = () => {
                 <label>Category</label>
                 <select
                   value={newDonation.category}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, category: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, category: e.target.value }))}
                   required
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 >
                   <option value="">Select category</option>
-                  {categories.slice(1).map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
+                  {categories.slice(1).map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -178,7 +259,7 @@ const DonationBoardPage = () => {
                 <label>Description</label>
                 <textarea
                   value={newDonation.description}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, description: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, description: e.target.value }))}
                   required
                   rows={3}
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
@@ -189,7 +270,7 @@ const DonationBoardPage = () => {
                 <input
                   type="text"
                   value={newDonation.quantity}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, quantity: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, quantity: e.target.value }))}
                   required
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 />
@@ -199,7 +280,7 @@ const DonationBoardPage = () => {
                 <input
                   type="text"
                   value={newDonation.location}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, location: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, location: e.target.value }))}
                   required
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 />
@@ -209,7 +290,7 @@ const DonationBoardPage = () => {
                 <input
                   type="text"
                   value={newDonation.contact}
-                  onChange={(e) => setNewDonation(prev => ({ ...prev, contact: e.target.value }))}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, contact: e.target.value }))}
                   required
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 />
@@ -224,6 +305,7 @@ const DonationBoardPage = () => {
           </form>
         </div>
       )}
+
       {/* Donations List */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
         <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Available Donations</h2>
@@ -233,14 +315,19 @@ const DonationBoardPage = () => {
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 16 }}>
-            {filteredDonations.map(donation => (
+            {filteredDonations.map((donation) => (
               <div
                 key={donation.id}
                 style={{
                   border: '1px solid #e2e8f0',
                   borderRadius: 8,
                   padding: 16,
-                  backgroundColor: donation.status === 'claimed' ? '#f8f8f8' : '#fff',
+                  backgroundColor:
+                    donation.status === 'claimed'
+                      ? '#f8f8f8'
+                      : donation.status === 'matched'
+                      ? '#f6fff8'
+                      : '#fff',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
@@ -252,23 +339,40 @@ const DonationBoardPage = () => {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: 12, color: '#666' }}>{formatTime(donation.timestamp)}</div>
-                    <div style={{ 
-                      fontSize: 10, 
-                      padding: '2px 8px', 
-                      borderRadius: 12, 
-                      backgroundColor: donation.status === 'available' ? '#667eea' : '#666',
-                      color: '#fff',
-                      display: 'inline-block'
-                    }}>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        padding: '2px 8px',
+                        borderRadius: 12,
+                        backgroundColor:
+                          donation.status === 'available'
+                            ? '#667eea'
+                            : donation.status === 'claimed'
+                            ? '#666'
+                            : '#0a9d56', // green for matched
+                        color: '#fff',
+                        display: 'inline-block',
+                        textTransform: 'capitalize',
+                      }}
+                    >
                       {donation.status}
                     </div>
                   </div>
                 </div>
+
                 <p style={{ margin: '8px 0', color: '#333' }}>{donation.description}</p>
+
                 <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
                   Donated by: {donation.donor}
                   {donation.status === 'claimed' && ` • Claimed by: ${donation.claimedBy}`}
+                  {donation.status === 'matched' && donation.matchedRequest && (
+                    <>
+                      {` • Matched to: Request #${donation.matchedRequest.id} — ${donation.matchedRequest.title}`}
+                      {donation.matchedRequest.requestedBy && ` • Requested by: ${donation.matchedRequest.requestedBy}`}
+                    </>
+                  )}
                 </div>
+
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     onClick={() => handleContact(donation)}
@@ -276,6 +380,8 @@ const DonationBoardPage = () => {
                   >
                     Contact
                   </button>
+
+                  {}
                   {donation.status === 'available' && (
                     <button
                       onClick={() => handleClaimDonation(donation.id)}
@@ -283,6 +389,24 @@ const DonationBoardPage = () => {
                     >
                       Claim
                     </button>
+                  )}
+
+                  {}
+                  {donation.status === 'matched' && donation.matchedRequest?.contact && (
+                    <a
+                      href={`tel:${donation.matchedRequest.contact}`}
+                      style={{
+                        background: '#fff',
+                        color: '#0a9d56',
+                        border: '1px solid #0a9d56',
+                        borderRadius: 4,
+                        padding: '4px 12px',
+                        fontSize: 12,
+                        textDecoration: 'none',
+                      }}
+                    >
+                      Contact Requester
+                    </a>
                   )}
                 </div>
               </div>
@@ -294,4 +418,4 @@ const DonationBoardPage = () => {
   );
 };
 
-export default DonationBoardPage; 
+export default DonationBoardPage;
