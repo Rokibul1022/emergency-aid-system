@@ -1,123 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import donationService from '../firebase/mergedDonationService';
 
+// Donation categories
+const categories = ['All', 'Food & Water', 'Medical', 'Shelter', 'Transport', 'Other'];
 
-
-
-   // TEMPLATE METHOD PATTERN
+// Template Method Pattern for Donation Matching
 class DonationMatchTemplate {
-  // Final algorithm
-  match(donation, requests) {
-    const candidates = this.filterCandidates(donation, requests);
+  match(donation, asks) {
+    const candidates = this.filterCandidates(donation, asks);
     if (!Array.isArray(candidates) || candidates.length === 0) return null;
 
-
-    const scored = candidates.map((r) => ({
-      request: r,
-      score: this.score(donation, r),
+    const scored = candidates.map((a) => ({
+      ask: a,
+      score: this.score(donation, a),
     }));
 
-
     const selected = this.select(scored);
-    return selected ? selected.request : null;
+    return selected ? selected.ask : null;
   }
 
-
-  // Hooks to customize
-  filterCandidates(_donation, _requests) {
+  filterCandidates(_donation, _asks) {
     throw new Error('filterCandidates() must be implemented by subclass');
   }
 
-
-  score(_donation, _request) {
-    // default: treat all candidates equally
-    return 1;
+  score(_donation, _ask) {
+    return 1; // Default: equal score
   }
 
-
   select(scoredList) {
-    // default: highest score wins (ties keep first)
     const sorted = [...scoredList].sort((a, b) => b.score - a.score);
     return sorted[0] || null;
   }
 }
 
-
-// Concrete implementation we use now: match by category
 class CategoryMatch extends DonationMatchTemplate {
-  filterCandidates(donation, requests) {
-    return requests.filter(
-      (r) => r.status === 'open' && r.category === donation.category
+  filterCandidates(donation, asks) {
+    return asks.filter(
+      (a) => a.status === 'pending' && a.category === donation.category
     );
   }
 }
 
-
-   // Mock Requests (for demo).
-
-
-const mockRequests = [
-  { id: 101, title: 'Need medical kits in Ward 12', category: 'Medical', description: 'bandages and first aid', status: 'open', requestedBy: 'Clinic Admin', contact: '+111111111' },
-  { id: 102, title: 'Food for flood-affected families', category: 'Food & Water', description: 'rice, lentils, clean water', status: 'open', requestedBy: 'Relief Team A', contact: '+222222222' },
-  { id: 103, title: 'Warm clothing required', category: 'Shelter', description: 'blankets, jackets', status: 'open', requestedBy: 'Community Center', contact: '+333333333' },
-  { id: 104, title: 'Transport needed', category: 'Transport', description: 'van or truck', status: 'open', requestedBy: 'Logistics Hub', contact: '+444444444' },
-];
-
-
-// Mock donations data
-const mockDonations = [
-  {
-    id: 1,
-    title: 'Food Supplies',
-    category: 'Food & Water',
-    description: 'Canned goods, rice, and bottled water',
-    quantity: '10 items',
-    location: '123 Main St',
-    donor: 'Alice',
-    status: 'available',
-    timestamp: Date.now() - 3600000,
-    contact: '+1234567890',
-  },
-  {
-    id: 2,
-    title: 'Medical Supplies',
-    category: 'Medical',
-    description: 'First aid kit, bandages, pain relievers',
-    quantity: '5 kits',
-    location: '456 Oak Ave',
-    donor: 'Bob',
-    status: 'claimed',
-    timestamp: Date.now() - 7200000,
-    contact: '+1234567891',
-    claimedBy: 'Carol',
-  },
-  {
-    id: 3,
-    title: 'Blankets and Clothing',
-    category: 'Shelter',
-    description: 'Warm blankets and winter clothing',
-    quantity: '20 pieces',
-    location: '789 Pine Rd',
-    donor: 'David',
-    status: 'available',
-    timestamp: Date.now() - 1800000,
-    contact: '+1234567892',
-  },
-];
-
-
-const categories = ['All', 'Food & Water', 'Medical', 'Shelter', 'Transport', 'Other'];
-
-
 const DonationBoardPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
-  const { user } = useAuth();
+  const { user, userData } = useAuth();
+  const effectiveRole = userData?.role || 'requester';
 
-
-  const [donations, setDonations] = useState(mockDonations);
+  const [donations, setDonations] = useState([]);
   const [showPostForm, setShowPostForm] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
@@ -127,68 +60,88 @@ const DonationBoardPage = () => {
     description: '',
     quantity: '',
     location: '',
-    contact: user?.phone || '',
+    contact: userData?.phone || '',
+    type: 'in-kind', // Added default type
   });
+  const [loading, setLoading] = useState(true);
 
+  // Subscribe to real-time donations
+  useEffect(() => {
+    if (!user) return;
 
- 
+    const unsubscribe = donationService.subscribeToDonations((donationsData) => {
+      setDonations(donationsData);
+      setLoading(false);
+    });
 
+    return () => unsubscribe();
+  }, [user]);
 
-  const handlePostDonation = (e) => {
+  const handlePostDonation = async (e) => {
     e.preventDefault();
-    const donation = {
-      id: Date.now(),
-      ...newDonation,
-      donor: user?.name || 'Anonymous',
+    const donationData = {
+      title: newDonation.title,
+      category: newDonation.category,
+      description: newDonation.description,
+      quantity: parseFloat(newDonation.quantity) || 1, // Parse quantity as number
+      location: newDonation.location,
+      contact: newDonation.contact,
+      donorId: user.uid,
+      donorName: userData?.displayName || 'Anonymous',
       status: 'available',
       timestamp: Date.now(),
+      type: newDonation.type, // Added type field
     };
 
-
-    // Auto-match using Template Method
     try {
+      const createdDonation = await donationService.createDonation(donationData);
+
+      // Auto-match using Template Method
       const matcher = new CategoryMatch();
-      const matched = matcher.match(donation, mockRequests);
-      if (matched) {
-        donation.status = 'matched';
-        donation.matchedRequest = matched;
+      const askedDonations = await donationService.getAllAskedDonations();
+      const matchedAsk = matcher.match(createdDonation, askedDonations);
+      if (matchedAsk) {
+        await donationService.linkDonationToAsk(createdDonation.id, matchedAsk.id);
+        createdDonation.status = 'matched';
+        createdDonation.linkedAskId = matchedAsk.id;
       }
-    } catch {
-      // ignore matching errors; donation stays 'available'
+
+      setDonations((prev) => [createdDonation, ...prev]);
+      setNewDonation({
+        title: '',
+        category: '',
+        description: '',
+        quantity: '',
+        location: '',
+        contact: userData?.phone || '',
+        type: 'in-kind', // Reset type
+      });
+      setShowPostForm(false);
+      addNotification('Donation posted successfully!', 'success');
+    } catch (error) {
+      console.error('Error posting donation:', error);
+      addNotification(`Failed to post donation: ${error.message}`, 'error');
     }
-
-
-    setDonations((prev) => [donation, ...prev]);
-    setNewDonation({
-      title: '',
-      category: '',
-      description: '',
-      quantity: '',
-      location: '',
-      contact: user?.phone || '',
-    });
-    setShowPostForm(false);
-    addNotification('Donation posted successfully!', 'success');
   };
 
-
-  const handleClaimDonation = (id) => {
-    setDonations((prev) =>
-      prev.map((d) =>
-        d.id === id ? { ...d, status: 'claimed', claimedBy: user?.name || 'Anonymous' } : d
-      )
-    );
-    addNotification('Donation claimed successfully!', 'success');
+  const handleClaimDonation = async (id) => {
+    try {
+      await donationService.claimDonation(id, user.uid, userData?.displayName || 'Anonymous');
+      setDonations((prev) =>
+        prev.map((d) =>
+          d.id === id ? { ...d, status: 'claimed', claimedBy: user.uid, claimedByName: userData?.displayName || 'Anonymous' } : d
+        )
+      );
+      addNotification('Donation claimed successfully!', 'success');
+    } catch (error) {
+      console.error('Error claiming donation:', error);
+      addNotification('Failed to claim donation', 'error');
+    }
   };
-
 
   const handleContact = (donation) => {
-    addNotification(`Contact ${donation.donor} at ${donation.contact}`, 'info');
+    addNotification(`Contact ${donation.donorName} at ${donation.contact}`, 'info');
   };
-
-
- 
-
 
   const filteredDonations = donations.filter((donation) => {
     const matchesCategory = selectedCategory === 'All' || donation.category === selectedCategory;
@@ -197,7 +150,6 @@ const DonationBoardPage = () => {
       donation.description.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;
   });
-
 
   const formatTime = (timestamp) => {
     const hours = Math.floor((Date.now() - timestamp) / 3600000);
@@ -208,26 +160,23 @@ const DonationBoardPage = () => {
     return `${days} day${days > 1 ? 's' : ''} ago`;
   };
 
-
- 
-
-
   return (
     <div className="page-container" style={{ background: '#f7f9fb', minHeight: '100vh', padding: '40px 0' }}>
       <h1 style={{ color: '#2d3748', textAlign: 'center', marginBottom: 32 }}>
         {t('donations.title') || 'Donation Board'}
       </h1>
 
-
       {/* Controls */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setShowPostForm(!showPostForm)}
-            style={{ background: '#667eea', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', fontWeight: 600 }}
-          >
-            {showPostForm ? 'Cancel' : 'Post New Donation'}
-          </button>
+          {effectiveRole === 'volunteer' && (
+            <button
+              onClick={() => setShowPostForm(!showPostForm)}
+              style={{ background: '#667eea', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', fontWeight: 600 }}
+            >
+              {showPostForm ? 'Cancel' : 'Post New Donation'}
+            </button>
+          )}
           <input
             type="text"
             placeholder="Search donations..."
@@ -249,9 +198,8 @@ const DonationBoardPage = () => {
         </div>
       </div>
 
-
-      {/* Post Donation Form */}
-      {showPostForm && (
+      {/* Post Donation Form (only for volunteers) */}
+      {showPostForm && effectiveRole === 'volunteer' && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
           <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Post New Donation</h2>
           <form onSubmit={handlePostDonation}>
@@ -295,7 +243,7 @@ const DonationBoardPage = () => {
               <div>
                 <label>Quantity</label>
                 <input
-                  type="text"
+                  type="number"
                   value={newDonation.quantity}
                   onChange={(e) => setNewDonation((prev) => ({ ...prev, quantity: e.target.value }))}
                   required
@@ -322,6 +270,17 @@ const DonationBoardPage = () => {
                   style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
                 />
               </div>
+              <div>
+                <label>Type</label>
+                <select
+                  value={newDonation.type}
+                  onChange={(e) => setNewDonation((prev) => ({ ...prev, type: e.target.value }))}
+                  style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
+                >
+                  <option value="in-kind">In-Kind (Goods)</option>
+                  <option value="monetary">Monetary</option>
+                </select>
+              </div>
             </div>
             <button
               type="submit"
@@ -333,13 +292,18 @@ const DonationBoardPage = () => {
         </div>
       )}
 
-
       {/* Donations List */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
         <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Available Donations</h2>
-        {filteredDonations.length === 0 ? (
-          <div style={{ color: '#888', fontStyle: 'italic', textAlign: 'center', padding: 40 }}>
-            No donations found matching your criteria
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '2rem' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🔄</div>
+            <div>Loading donations...</div>
+          </div>
+        ) : filteredDonations.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: '#718096' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>📭</div>
+            <div>No donations found</div>
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 16 }}>
@@ -388,21 +352,15 @@ const DonationBoardPage = () => {
                   </div>
                 </div>
 
-
                 <p style={{ margin: '8px 0', color: '#333' }}>{donation.description}</p>
 
-
                 <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
-                  Donated by: {donation.donor}
-                  {donation.status === 'claimed' && ` • Claimed by: ${donation.claimedBy}`}
-                  {donation.status === 'matched' && donation.matchedRequest && (
-                    <>
-                      {` • Matched to: Request #${donation.matchedRequest.id} — ${donation.matchedRequest.title}`}
-                      {donation.matchedRequest.requestedBy && ` • Requested by: ${donation.matchedRequest.requestedBy}`}
-                    </>
+                  Donated by: {donation.donorName}
+                  {donation.status === 'claimed' && ` • Claimed by: ${donation.claimedByName}`}
+                  {donation.status === 'matched' && donation.linkedAskId && (
+                    <span> • Matched to Ask #{donation.linkedAskId}</span>
                   )}
                 </div>
-
 
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
@@ -412,34 +370,13 @@ const DonationBoardPage = () => {
                     Contact
                   </button>
 
-
-                  {}
-                  {donation.status === 'available' && (
+                  {donation.status === 'available' && effectiveRole === 'requester' && (
                     <button
                       onClick={() => handleClaimDonation(donation.id)}
                       style={{ background: '#667eea', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 12px', fontSize: 12 }}
                     >
                       Claim
                     </button>
-                  )}
-
-
-                  {}
-                  {donation.status === 'matched' && donation.matchedRequest?.contact && (
-                    <a
-                      href={`tel:${donation.matchedRequest.contact}`}
-                      style={{
-                        background: '#fff',
-                        color: '#0a9d56',
-                        border: '1px solid #0a9d56',
-                        borderRadius: 4,
-                        padding: '4px 12px',
-                        fontSize: 12,
-                        textDecoration: 'none',
-                      }}
-                    >
-                      Contact Requester
-                    </a>
                   )}
                 </div>
               </div>
@@ -451,7 +388,4 @@ const DonationBoardPage = () => {
   );
 };
 
-
 export default DonationBoardPage;
-
-

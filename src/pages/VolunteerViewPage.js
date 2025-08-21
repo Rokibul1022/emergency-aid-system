@@ -10,7 +10,7 @@ import {
   URGENCY_LEVELS 
 } from '../firebase/requests';
 import { sendMessage, subscribeToChat } from '../firebase/chat';
-import { createDonation } from '../firebase/donations';
+import donationService from '../firebase/mergedDonationService';
 import RequestLocationMap from '../components/common/RequestLocationMap';
 import { subscribeToActivePanicAlerts } from '../firebase/alerts';
 import { db } from '../firebase/config';
@@ -30,6 +30,10 @@ import {
   subscribeToShelterRequests,
   SHELTER_REQUEST_STATUS
 } from '../firebase/shelterRequests';
+import { getAllAskedDonations, subscribeToAskedDonations } from '../firebase/donations';
+
+// Donation categories aligned with DonationBoardPage.js
+const DONATION_CATEGORIES = ['Food & Water', 'Medical', 'Shelter', 'Transport', 'Other'];
 
 const VolunteerViewPage = () => {
   const { t } = useTranslation();
@@ -52,7 +56,7 @@ const VolunteerViewPage = () => {
   const [showDonationModal, setShowDonationModal] = useState(false);
   const [donationForm, setDonationForm] = useState({
     title: '',
-    category: 'general',
+    category: DONATION_CATEGORIES[0], // Default to first category
     description: '',
     amount: '',
     type: 'monetary'
@@ -80,6 +84,11 @@ const VolunteerViewPage = () => {
     status: 'open',
     location: { lat: '', lng: '' },
   });
+
+  // Asked donations for volunteers
+  const [askedDonations, setAskedDonations] = useState([]);
+  const [selectedAsk, setSelectedAsk] = useState(null);
+  const [showAskDonationModal, setShowAskDonationModal] = useState(false);
 
   // Helper functions
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -168,6 +177,29 @@ const VolunteerViewPage = () => {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Subscribe to real-time asked donations for volunteers
+  useEffect(() => {
+    if (!user || !user.uid || userData?.role !== 'volunteer') return;
+    
+    const unsubscribe = subscribeToAskedDonations((askedDonationsData) => {
+      const askedWithDistance = askedDonationsData.map(ask => {
+        if (userLocation && ask.location) {
+          const distance = calculateDistance(
+            userLocation.lat,
+            userLocation.lng,
+            ask.location.lat,
+            ask.location.lng
+          );
+          return { ...ask, distance: distance.toFixed(1) };
+        }
+        return { ...ask, distance: null };
+      });
+      setAskedDonations(askedWithDistance);
+    });
+
+    return () => unsubscribe();
+  }, [user, userData, userLocation]);
 
   // Simple: Just show empty state, let user load data manually
   useEffect(() => {
@@ -287,31 +319,43 @@ const VolunteerViewPage = () => {
 
   const handleDonationSubmit = async (e) => {
     e.preventDefault();
-    if (!donationForm.title || !donationForm.description) {
+    if (!donationForm.title || !donationForm.description || !donationForm.category) {
       addNotification('Please fill in all required fields', 'error');
+      return;
+    }
+    if (donationForm.type === 'monetary' && (!donationForm.amount || isNaN(parseFloat(donationForm.amount)))) {
+      addNotification('Please enter a valid amount for monetary donation', 'error');
       return;
     }
 
     try {
       const donationData = {
-        ...donationForm,
+        title: donationForm.title,
+        category: donationForm.category,
+        description: donationForm.description,
         amount: donationForm.type === 'monetary' ? parseFloat(donationForm.amount) : null,
+        type: donationForm.type,
         donorId: user.uid,
         donorName: userData?.displayName || 'Anonymous Volunteer',
         linkedRequestId: selected?.id || null,
-        status: 'pending'
+        status: 'pending',
+        timestamp: Date.now()
       };
 
-      await createDonation(donationData);
+      const createdDonation = await donationService.createDonation(donationData);
+      if (selectedAsk) {
+        await donationService.linkDonationToAsk(createdDonation.id, selectedAsk.id);
+      }
       addNotification('Donation submitted successfully!', 'success');
       setShowDonationModal(false);
       setDonationForm({
         title: '',
-        category: 'general',
+        category: DONATION_CATEGORIES[0],
         description: '',
         amount: '',
         type: 'monetary'
       });
+      setSelectedAsk(null);
     } catch (error) {
       console.error('Error creating donation:', error);
       addNotification('Failed to submit donation', 'error');
@@ -517,6 +561,7 @@ const VolunteerViewPage = () => {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[
               { id: 'requests', label: 'Emergency Requests' },
+              { id: 'donation-asks', label: 'Donation Asks' },
               { id: 'shelters', label: 'Shelter Management' },
               { id: 'shelter-requests', label: 'Shelter Requests' }
             ].map(tab => (
@@ -1003,6 +1048,73 @@ const VolunteerViewPage = () => {
           </>
         )}
 
+        {activeTab === 'donation-asks' && (
+          <div>
+            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Donation Asks from Requesters</h2>
+            <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc' }}>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Requester</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Title</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Category</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Quantity</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Status</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {askedDonations.map(ask => (
+                    <tr key={ask.id}>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ fontWeight: 600 }}>{ask.requesterName}</div>
+                        <div style={{ fontSize: 12, color: '#718096' }}>{ask.requesterPhone}</div>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.title}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.category}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.quantity}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{ 
+                          padding: '4px 12px', 
+                          borderRadius: 12, 
+                          fontSize: 12,
+                          backgroundColor: ask.status === 'pending' ? '#d69e2e' : ask.status === 'matched' ? '#38a169' : '#e53e3e',
+                          color: '#fff',
+                          fontWeight: '600',
+                          textTransform: 'uppercase'
+                        }}>
+                          {ask.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        {ask.status === 'pending' && (
+                          <button
+                            onClick={() => {
+                              setSelectedAsk(ask);
+                              setShowDonationModal(true);
+                            }}
+                            style={{ 
+                              background: '#38a169', 
+                              color: '#fff', 
+                              border: 'none', 
+                              borderRadius: 6, 
+                              padding: '6px 12px', 
+                              fontSize: 12,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Donate
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'shelters' && (
           <div>
             <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Shelter Management</h2>
@@ -1271,7 +1383,7 @@ const VolunteerViewPage = () => {
                     onChange={e => setManualLng(e.target.value)}
                     placeholder="Longitude"
                     step="any"
-                    style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
+                    style={{ flex: 1, padding: '12px 12px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
                   />
                 </div>
               </div>
@@ -1378,7 +1490,21 @@ const VolunteerViewPage = () => {
                     <option value="services">Services</option>
                   </select>
                 </div>
-                  <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Category</label>
+                  <select
+                    value={donationForm.category}
+                    onChange={(e) => setDonationForm(prev => ({ ...prev, category: e.target.value }))}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                    required
+                  >
+                    <option value="">Select category</option>
+                    {DONATION_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom: 16 }}>
                   <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Title</label>
                     <input
                     type="text"
@@ -1398,6 +1524,20 @@ const VolunteerViewPage = () => {
                     style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
                   />
                 </div>
+                {donationForm.type === 'monetary' && (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Amount</label>
+                    <input
+                      type="number"
+                      value={donationForm.amount}
+                      onChange={(e) => setDonationForm(prev => ({ ...prev, amount: e.target.value }))}
+                      placeholder="Enter amount"
+                      style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                      min="0"
+                      step="any"
+                    />
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 12 }}>
                   <button
                     type="submit"
@@ -1407,7 +1547,10 @@ const VolunteerViewPage = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowDonationModal(false)}
+                    onClick={() => {
+                      setShowDonationModal(false);
+                      setSelectedAsk(null);
+                    }}
                     style={{ flex: 1, background: '#e2e8f0', color: '#4a5568', border: 'none', borderRadius: 8, padding: '12px 24px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
                   >
                     Cancel

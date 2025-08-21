@@ -10,6 +10,7 @@ import {
   createSampleData,
 } from '../firebase/requests';
 import { createPanicAlert } from '../firebase/alerts';
+import donationService from '../firebase/mergedDonationService';
 import './DashboardPage.css';
 
 const DashboardPage = () => {
@@ -31,26 +32,31 @@ const DashboardPage = () => {
   const [showPanicNoLocation, setShowPanicNoLocation] = useState(false);
   const [manualAddress, setManualAddress] = useState('');
   const [isGeocoding, setIsGeocoding] = useState(false);
+  const [askedDonations, setAskedDonations] = useState([]);
+  const [showAskDonationForm, setShowAskDonationForm] = useState(false);
+  const [newAskedDonation, setNewAskedDonation] = useState({
+    title: '',
+    category: '',
+    description: '',
+    quantity: '',
+  });
+  // Define categories for the donation form
+  const categories = ['food', 'clothing', 'medical', 'shelter'];
 
-  // Simple function to load Jack's data immediately
+  // Load Jack's data if needed
   const loadJacksData = async () => {
     try {
       console.log('Loading Jack\'s data immediately...');
       setLoading(true);
       
-      // Ensure Jack has a phone number
       if (!userData?.phone) {
         console.log('Setting phone number for Jack...');
         await updateUser({ phone: '1234567890' });
       }
       
-      // Create sample data for Jack
       const result = await createSampleData(user.uid, userData);
       if (result.success) {
-        // Get Jack's requests
         const userRequests = await getRequestsByRequester(user.uid);
-        
-        // Calculate stats
         const pendingRequests = userRequests.filter(req => req.status === 'pending');
         const activeRequests = userRequests.filter(req => req.status === 'in-progress');
         const completedRequests = userRequests.filter(req => req.status === 'resolved');
@@ -62,11 +68,8 @@ const DashboardPage = () => {
           pending: pendingRequests.length,
         };
         
-        // Update dashboard
         setStats(newStats);
         setRecentRequests(userRequests.slice(0, 5));
-        
-        console.log('✅ Jack\'s data loaded successfully!', newStats);
       }
     } catch (error) {
       console.error('Error loading Jack\'s data:', error);
@@ -76,7 +79,6 @@ const DashboardPage = () => {
   };
 
   useEffect(() => {
-    // Wait for user and userData to be loaded before fetching dashboard data
     if (!user || !user.uid || !userData) return;
     const loadDashboardData = async () => {
       try {
@@ -86,9 +88,7 @@ const DashboardPage = () => {
         console.log('Role:', role || userData?.role);
         const effectiveRole = role || userData?.role || 'requester';
         if (effectiveRole === 'requester') {
-          const { getOpenRequests } = await import('../firebase/requests');
-          const allRequests = await getOpenRequests(500);
-          const userRequests = allRequests.filter(req => req.requesterId === user.uid);
+          const userRequests = await getRequestsByRequester(user.uid);
           const pendingRequests = userRequests.filter(req => req.status === 'pending');
           const activeRequests = userRequests.filter(req => req.status === 'in-progress');
           const completedRequests = userRequests.filter(req => req.status === 'resolved');
@@ -100,6 +100,9 @@ const DashboardPage = () => {
           };
           setStats(newStats);
           setRecentRequests(userRequests.slice(0, 5));
+          // Fix: Use donationService.getAskedDonationsByRequester
+          const userAskedDonations = await donationService.getAskedDonationsByRequester(user.uid);
+          setAskedDonations(userAskedDonations);
         } else if (effectiveRole === 'volunteer') {
           const assignedRequests = await getRequestsByVolunteer(user.uid);
           const { getOpenRequests } = await import('../firebase/requests');
@@ -249,6 +252,20 @@ const DashboardPage = () => {
     };
   }, [user, userData, role]);
 
+  // Subscribe to asked donations for requester
+  useEffect(() => {
+    if (!user || !user.uid) return;
+    if ((role || userData?.role) !== 'requester') return;
+
+    // Fix: Use donationService.subscribeToAskedDonations
+    const unsubscribe = donationService.subscribeToAskedDonations((askedDonationsData) => {
+      const userAskedDonations = askedDonationsData.filter(ask => ask.requesterId === user.uid);
+      setAskedDonations(userAskedDonations);
+    }, { requesterId: user.uid });
+
+    return () => unsubscribe();
+  }, [user, role, userData]);
+
   const getRoleBasedContent = () => {
     const displayName = userData?.displayName || user?.email?.split('@')[0] || 'User';
     
@@ -275,6 +292,20 @@ const DashboardPage = () => {
               icon: '📝',
               link: '/request',
               color: 'primary',
+            },
+            {
+              title: 'Ask for Donation',
+              description: 'Request donations from volunteers',
+              icon: '💰',
+              onClick: () => setShowAskDonationForm(true),
+              color: 'secondary',
+            },
+            {
+              title: 'View Available Donations',
+              description: 'See donations from volunteers',
+              icon: '🎁',
+              link: '/donations',
+              color: 'info',
             },
             {
               title: 'View My Requests',
@@ -315,6 +346,13 @@ const DashboardPage = () => {
               icon: '🤝',
               link: '/volunteer',
               color: 'primary',
+            },
+            {
+              title: 'Post Donation',
+              description: 'Post new donations for requesters',
+              icon: '💰',
+              link: '/donations',
+              color: 'secondary',
             },
             {
               title: 'My Active Requests',
@@ -593,13 +631,49 @@ const DashboardPage = () => {
     }
   };
 
+  const handleAskDonationSubmit = async (e) => {
+    e.preventDefault();
+    if (!newAskedDonation.title || !newAskedDonation.category || !newAskedDonation.description) {
+      addNotification('Please fill in all required fields', 'error');
+      return;
+    }
+
+    try {
+      const askedDonationData = {
+        title: newAskedDonation.title,
+        category: newAskedDonation.category,
+        description: newAskedDonation.description,
+        quantity: parseFloat(newAskedDonation.quantity) || 1, // Ensure quantity is a number
+        requesterId: user.uid,
+        requesterName: userData?.displayName || 'Anonymous',
+        requesterPhone: userData?.phone || '',
+        status: donationService.DONATION_STATUS.PENDING,
+      };
+
+      // Fix: Use donationService.createAskedDonation
+      const createdAsk = await donationService.createAskedDonation(askedDonationData);
+      setAskedDonations((prev) => [createdAsk, ...prev]);
+      setNewAskedDonation({
+        title: '',
+        category: '',
+        description: '',
+        quantity: '',
+      });
+      setShowAskDonationForm(false);
+      addNotification('Donation request submitted successfully!', 'success');
+    } catch (error) {
+      console.error('Error submitting donation request:', error);
+      addNotification('Failed to submit donation request', 'error');
+    }
+  };
+
   const renderQuickActions = () => {
     const effectiveRole = role || userData?.role || 'requester';
     // Show quick actions for all roles
     return (
       <div className="quick-actions-grid">
         {content.quickActions.map((action, index) => (
-          <Link key={index} to={action.link} className="quick-action-card">
+          <Link key={index} to={action.link} className="quick-action-card" onClick={action.onClick}>
             <div className="action-icon">{action.icon}</div>
             <div className="action-content">
               <h3 className="action-title">{action.title}</h3>
@@ -638,7 +712,6 @@ const DashboardPage = () => {
       </div>
     );
   };
-
 
   if (loading) {
     return (
@@ -832,7 +905,7 @@ const DashboardPage = () => {
                       onChange={e => setManualLng(e.target.value)}
                       placeholder="Longitude (e.g. 90.4125)"
                       step="any"
-                      style={{ flex: 1, padding: '12px 16px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
+                      style={{ flex: 1, padding: '12px 12px', border: '1px solid #e2e8f0', borderRadius: 12, fontSize: '16px' }}
                     />
                   </div>
                 </div>
@@ -888,8 +961,6 @@ const DashboardPage = () => {
             </div>
           )}
         </div>
-        
-
       </div>
 
       <div className="stats-grid">
@@ -959,8 +1030,97 @@ const DashboardPage = () => {
           </div>
         </div>
       </div>
+      {/* Ask Donation Form for Requester */}
+      {showAskDonationForm && (role || userData?.role) === 'requester' && (
+        <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
+          <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Ask for Donation</h2>
+          <form onSubmit={handleAskDonationSubmit}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div>
+                <label>Title</label>
+                <input
+                  type="text"
+                  value={newAskedDonation.title}
+                  onChange={(e) => setNewAskedDonation((prev) => ({ ...prev, title: e.target.value }))}
+                  required
+                  style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
+                />
+              </div>
+              <div>
+                <label>Category</label>
+                <select
+                  value={newAskedDonation.category}
+                  onChange={(e) => setNewAskedDonation((prev) => ({ ...prev, category: e.target.value }))}
+                  required
+                  style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
+                >
+                  <option value="">Select category</option>
+                  {categories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label>Description</label>
+                <textarea
+                  value={newAskedDonation.description}
+                  onChange={(e) => setNewAskedDonation((prev) => ({ ...prev, description: e.target.value }))}
+                  required
+                  rows={3}
+                  style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
+                />
+              </div>
+              <div>
+                <label>Quantity</label>
+                <input
+                  type="number"
+                  value={newAskedDonation.quantity}
+                  onChange={(e) => setNewAskedDonation((prev) => ({ ...prev, quantity: e.target.value }))}
+                  required
+                  style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              style={{ background: '#667eea', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', marginTop: 16, fontWeight: 600 }}
+            >
+              Submit Ask
+            </button>
+          </form>
+        </div>
+      )}
+      {/* Asked Donations List for Requester */}
+      {(role || userData?.role) === 'requester' && (
+        <div style={{ marginTop: 32 }}>
+          <h2 style={{ color: '#2d3748', marginBottom: 16 }}>My Asked Donations</h2>
+          <div style={{ display: 'grid', gap: 16 }}>
+            {askedDonations.map((ask) => (
+              <div key={ask.id} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 16 }}>
+                <h3 style={{ color: '#2d3748', margin: 0 }}>{ask.title}</h3>
+                <div style={{ fontSize: 12, color: '#666' }}>
+                  {ask.category} • {ask.quantity}
+                </div>
+                <p style={{ margin: '8px 0', color: '#333' }}>{ask.description}</p>
+                <span style={{
+                  fontSize: 10,
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  backgroundColor: ask.status === 'pending' ? '#d69e2e' : ask.status === 'matched' ? '#38a169' : '#e53e3e',
+                  color: '#fff',
+                  textTransform: 'capitalize',
+                }}>
+                  {ask.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default DashboardPage; 
+export default DashboardPage;
