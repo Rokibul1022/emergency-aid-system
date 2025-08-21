@@ -4,17 +4,19 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { createRequest, REQUEST_CATEGORIES, URGENCY_LEVELS } from '../firebase/requests';
 import notificationService from '../services/notificationService';
-// REMOVE: import RequestLocationMap from '../components/common/RequestLocationMap';
+
 
 const categories = Object.entries(REQUEST_CATEGORIES).map(([key, value]) => ({
   value,
   label: key.charAt(0) + key.slice(1).toLowerCase()
 }));
 
+
 const urgencies = Object.entries(URGENCY_LEVELS).map(([key, value]) => ({
   value,
   label: key.charAt(0) + key.slice(1).toLowerCase()
 }));
+
 
 const initialForm = {
   category: '',
@@ -29,13 +31,124 @@ const initialForm = {
   image: null,
 };
 
+
+// Builder class for constructing request data
+class RequestBuilder {
+  constructor(requesterId) {
+    this.requestData = {
+      title: '',
+      description: '',
+      category: '',
+      urgency: '',
+      location: null,
+      latitude: null,
+      longitude: null,
+      timestamp: new Date(),
+      panic: false,
+      contact: {
+        name: '',
+        phone: '',
+        email: ''
+      },
+      requesterId,
+      imageURL: null
+    };
+  }
+
+
+  setCategory(category) {
+    this.requestData.category = category;
+    this.requestData.title = `${category} Emergency Request`;
+    return this;
+  }
+
+
+  setUrgency(urgency) {
+    this.requestData.urgency = urgency;
+    return this;
+  }
+
+
+  setDescription(description) {
+    this.requestData.description = description;
+    return this;
+  }
+
+
+  setContact({ name, phone, email }) {
+    this.requestData.contact = { name, phone, email };
+    return this;
+  }
+
+
+  setLocation({ lat, lng, address }) {
+    if (lat && lng) {
+      this.requestData.location = { lat: parseFloat(lat), lng: parseFloat(lng) };
+      this.requestData.latitude = parseFloat(lat);
+      this.requestData.longitude = parseFloat(lng);
+    } else if (address) {
+      this.requestData.location = { address };
+    }
+    return this;
+  }
+
+
+  setImage(image) {
+    this.requestData.imageURL = image ? null : null; // Placeholder for future Firebase Storage integration
+    return this;
+  }
+
+
+  setTimestamp(timestamp = new Date()) {
+    this.requestData.timestamp = timestamp;
+    return this;
+  }
+
+
+  setPanic(panic = false) {
+    this.requestData.panic = panic;
+    return this;
+  }
+
+
+  build() {
+    if (!this.requestData.category) {
+      throw new Error('Category is required');
+    }
+    if (!this.requestData.urgency) {
+      throw new Error('Urgency is required');
+    }
+    if (!this.requestData.description) {
+      throw new Error('Description is required');
+    }
+    if (!this.requestData.contact.name) {
+      throw new Error('Contact name is required');
+    }
+    if (!this.requestData.contact.phone) {
+      throw new Error('Contact phone is required');
+    }
+    if (!this.requestData.contact.email) {
+      throw new Error('Contact email is required');
+    }
+    if (!this.requestData.location && (!this.requestData.latitude || !this.requestData.longitude)) {
+      throw new Error('Location or coordinates are required');
+    }
+    return { ...this.requestData };
+  }
+}
+
+
 const RequestFormPage = () => {
   const { t } = useTranslation();
   const { getCurrentLocation, addNotification, currentLocation } = useApp();
   const { user, userData, updateUser } = useAuth();
   const [form, setForm] = useState(initialForm);
+  const [errors, setErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+  const [locationStatus, setLocationStatus] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Update form when userData changes
+
   React.useEffect(() => {
     if (userData) {
       setForm(prev => ({
@@ -47,9 +160,8 @@ const RequestFormPage = () => {
     }
   }, [userData]);
 
-  // Auto-fill location from saved user location or context
+
   React.useEffect(() => {
-    // Only fill if fields are empty
     if (
       (!form.location && !form.lat && !form.lng) &&
       (userData?.location || currentLocation)
@@ -64,12 +176,8 @@ const RequestFormPage = () => {
         }));
       }
     }
-    // eslint-disable-next-line
-  }, [userData?.location, currentLocation]);
-  const [errors, setErrors] = useState({});
-  const [submitting, setSubmitting] = useState(false);
-  const [locationStatus, setLocationStatus] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  }, [userData?.location, currentLocation, form.location, form.lat, form.lng]);
+
 
   const handleChange = (e) => {
     const { name, value, files } = e.target;
@@ -79,6 +187,7 @@ const RequestFormPage = () => {
     }));
     setErrors((prev) => ({ ...prev, [name]: '' }));
   };
+
 
   const handleGetLocation = async () => {
     setLocationStatus('Locating...');
@@ -98,9 +207,10 @@ const RequestFormPage = () => {
     setIsLoading(false);
   };
 
+
   const validate = () => {
     const newErrors = {};
-    
+   
     if (!form.category) newErrors.category = 'Category required';
     if (!form.urgency) newErrors.urgency = 'Urgency required';
     if (!form.description) newErrors.description = 'Description required';
@@ -108,28 +218,28 @@ const RequestFormPage = () => {
     if (!form.contactPhone) newErrors.contactPhone = 'Phone required';
     if (!form.contactEmail) newErrors.contactEmail = 'Email required';
     if (!form.location && (!form.lat || !form.lng)) newErrors.location = 'Location required';
-    
+   
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+   
     console.log('Submit attempt - User:', user?.uid);
     console.log('Submit attempt - UserData:', userData);
-    
+   
     if (!validate()) {
       console.log('Validation failed');
       return;
     }
-    
+   
     if (!user) {
       addNotification('Please log in to submit a request', 'error');
       return;
     }
-    
-    // Force set role if not set
+   
     if (!userData?.role) {
       console.log('No role found, setting as requester');
       try {
@@ -139,40 +249,39 @@ const RequestFormPage = () => {
         console.error('Error setting role:', error);
       }
     }
-    
+   
     setSubmitting(true);
     setIsLoading(true);
-    
+   
     try {
-      // Prepare request data
-      const requestData = {
-        title: `${form.category} Emergency Request`,
-        description: form.description,
-        category: form.category,
-        urgency: form.urgency,
-        location: form.lat && form.lng ? { lat: parseFloat(form.lat), lng: parseFloat(form.lng) } : null,
-        latitude: form.lat ? parseFloat(form.lat) : null,
-        longitude: form.lng ? parseFloat(form.lng) : null,
-        timestamp: new Date(),
-        panic: false,
-        contact: {
+      const requestData = new RequestBuilder(user.uid)
+        .setCategory(form.category)
+        .setUrgency(form.urgency)
+        .setDescription(form.description)
+        .setContact({
           name: form.contactName,
           phone: form.contactPhone,
           email: form.contactEmail
-        },
-        requesterId: user.uid,
-        imageURL: null // TODO: Implement image upload to Firebase Storage
-      };
+        })
+        .setLocation({
+          lat: form.lat,
+          lng: form.lng,
+          address: form.location
+        })
+        .setImage(form.image)
+        .setTimestamp()
+        .setPanic()
+        .build();
+
 
       console.log('Request data to submit:', requestData);
 
-      // Create request in Firebase
+
       const result = await createRequest(requestData);
-      
+     
       if (result.success) {
         addNotification('Request submitted successfully!', 'success');
-        
-        // Send notifications
+       
         try {
           await notificationService.notifyRequestReceived(
             { id: result.id, ...requestData },
@@ -180,13 +289,11 @@ const RequestFormPage = () => {
           );
         } catch (notificationError) {
           console.error('Error sending notifications:', notificationError);
-          // Don't fail the request submission if notifications fail
         }
       } else {
         throw new Error(result.error || 'Failed to create request');
       }
-      
-      // Reset form
+     
       setForm({
         ...initialForm,
         contactName: userData?.displayName || '',
@@ -195,7 +302,7 @@ const RequestFormPage = () => {
       });
       setLocationStatus('');
       setErrors({});
-      
+     
     } catch (error) {
       console.error('Error submitting request:', error);
       addNotification(error.message || 'Failed to submit request', 'error');
@@ -206,14 +313,12 @@ const RequestFormPage = () => {
   };
 
 
-
   return (
     <div className="page-container" style={{
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       minHeight: '100vh',
       padding: '40px 20px'
     }}>
-
       <div style={{
         maxWidth: 600,
         margin: '0 auto',
@@ -236,7 +341,7 @@ const RequestFormPage = () => {
         }}>
           {t('request.title') || 'Submit Emergency Request'}
         </h1>
-        
+       
         <form className="request-form" onSubmit={handleSubmit} style={{
           display: 'flex',
           flexDirection: 'column',
@@ -281,6 +386,7 @@ const RequestFormPage = () => {
               )}
             </div>
 
+
             <div>
               <label style={{
                 display: 'block',
@@ -320,6 +426,7 @@ const RequestFormPage = () => {
             </div>
           </div>
 
+
           <div>
             <label style={{
               display: 'block',
@@ -353,6 +460,7 @@ const RequestFormPage = () => {
               </span>
             )}
           </div>
+
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div>
@@ -388,6 +496,7 @@ const RequestFormPage = () => {
               )}
             </div>
 
+
             <div>
               <label style={{
                 display: 'block',
@@ -422,6 +531,7 @@ const RequestFormPage = () => {
             </div>
           </div>
 
+
           <div>
             <label style={{
               display: 'block',
@@ -454,6 +564,7 @@ const RequestFormPage = () => {
               </span>
             )}
           </div>
+
 
           <div>
             <label style={{
@@ -502,7 +613,6 @@ const RequestFormPage = () => {
                 {isLoading ? 'Getting...' : '📍 GPS'}
               </button>
             </div>
-            {/* Manual Lat/Lng Fallback */}
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
               <input
                 type="number"
@@ -539,11 +649,11 @@ const RequestFormPage = () => {
                 }}
               />
             </div>
-            <div style={{ color: '#888', fontSize: 13, marginTop: 4 }}>
+            <div style={{ color: '#888', fontSize: '13px', lineHeight: '20px', marginTop: 4 }}>
               <span>Tip: If GPS is unavailable, enter your coordinates manually. You can use Google Maps or OpenStreetMap to find your latitude/longitude.</span>
             </div>
             {locationStatus && (
-              <span style={{ 
+              <span style={{
                 color: locationStatus.includes('Failed') ? '#e53e3e' : '#38a169',
                 fontSize: '14px',
                 marginTop: 4,
@@ -558,8 +668,7 @@ const RequestFormPage = () => {
               </span>
             )}
           </div>
-          {/* Map Preview for Location */}
-          {/* REMOVE the map preview section (any <RequestLocationMap ... /> usage) */}
+
 
           <div>
             <label style={{
@@ -587,12 +696,12 @@ const RequestFormPage = () => {
             />
           </div>
 
+
           <button
             type="submit"
             disabled={submitting || isLoading}
             style={{
               padding: '16px 32px',
-              backgroundColor: 'linear-gradient(135deg, #667eea, #764ba2)',
               background: 'linear-gradient(135deg, #667eea, #764ba2)',
               color: '#fff',
               border: 'none',
@@ -607,12 +716,11 @@ const RequestFormPage = () => {
           >
             {submitting ? 'Submitting...' : 'Submit Emergency Request'}
           </button>
-          
-
         </form>
       </div>
     </div>
   );
 };
 
-export default RequestFormPage; 
+
+export default RequestFormPage;
