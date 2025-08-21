@@ -4,31 +4,38 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 
 
+
+
    // TEMPLATE METHOD PATTERN
 class DonationMatchTemplate {
-  // Final algorithm 
+  // Final algorithm
   match(donation, requests) {
     const candidates = this.filterCandidates(donation, requests);
     if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
 
     const scored = candidates.map((r) => ({
       request: r,
       score: this.score(donation, r),
     }));
 
+
     const selected = this.select(scored);
     return selected ? selected.request : null;
   }
+
 
   // Hooks to customize
   filterCandidates(_donation, _requests) {
     throw new Error('filterCandidates() must be implemented by subclass');
   }
 
+
   score(_donation, _request) {
     // default: treat all candidates equally
     return 1;
   }
+
 
   select(scoredList) {
     // default: highest score wins (ties keep first)
@@ -36,6 +43,7 @@ class DonationMatchTemplate {
     return sorted[0] || null;
   }
 }
+
 
 // Concrete implementation we use now: match by category
 class CategoryMatch extends DonationMatchTemplate {
@@ -46,7 +54,9 @@ class CategoryMatch extends DonationMatchTemplate {
   }
 }
 
+
    // Mock Requests (for demo).
+
 
 const mockRequests = [
   { id: 101, title: 'Need medical kits in Ward 12', category: 'Medical', description: 'bandages and first aid', status: 'open', requestedBy: 'Clinic Admin', contact: '+111111111' },
@@ -55,7 +65,8 @@ const mockRequests = [
   { id: 104, title: 'Transport needed', category: 'Transport', description: 'van or truck', status: 'open', requestedBy: 'Logistics Hub', contact: '+444444444' },
 ];
 
-// Mock donations data 
+
+// Mock donations data
 const mockDonations = [
   {
     id: 1,
@@ -96,12 +107,15 @@ const mockDonations = [
   },
 ];
 
+
 const categories = ['All', 'Food & Water', 'Medical', 'Shelter', 'Transport', 'Other'];
+
 
 const DonationBoardPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
   const { user } = useAuth();
+
 
   const [donations, setDonations] = useState(mockDonations);
   const [showPostForm, setShowPostForm] = useState(false);
@@ -116,7 +130,9 @@ const DonationBoardPage = () => {
     contact: user?.phone || '',
   });
 
-  
+
+ 
+
 
   const handlePostDonation = (e) => {
     e.preventDefault();
@@ -127,6 +143,7 @@ const DonationBoardPage = () => {
       status: 'available',
       timestamp: Date.now(),
     };
+
 
     // Auto-match using Template Method
     try {
@@ -139,6 +156,7 @@ const DonationBoardPage = () => {
     } catch {
       // ignore matching errors; donation stays 'available'
     }
+
 
     setDonations((prev) => [donation, ...prev]);
     setNewDonation({
@@ -153,6 +171,7 @@ const DonationBoardPage = () => {
     addNotification('Donation posted successfully!', 'success');
   };
 
+
   const handleClaimDonation = (id) => {
     setDonations((prev) =>
       prev.map((d) =>
@@ -162,11 +181,14 @@ const DonationBoardPage = () => {
     addNotification('Donation claimed successfully!', 'success');
   };
 
+
   const handleContact = (donation) => {
     addNotification(`Contact ${donation.donor} at ${donation.contact}`, 'info');
   };
 
-  
+
+ 
+
 
   const filteredDonations = donations.filter((donation) => {
     const matchesCategory = selectedCategory === 'All' || donation.category === selectedCategory;
@@ -175,6 +197,7 @@ const DonationBoardPage = () => {
       donation.description.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;
   });
+
 
   const formatTime = (timestamp) => {
     const hours = Math.floor((Date.now() - timestamp) / 3600000);
@@ -185,13 +208,16 @@ const DonationBoardPage = () => {
     return `${days} day${days > 1 ? 's' : ''} ago`;
   };
 
-  
+
+ 
+
 
   return (
     <div className="page-container" style={{ background: '#f7f9fb', minHeight: '100vh', padding: '40px 0' }}>
       <h1 style={{ color: '#2d3748', textAlign: 'center', marginBottom: 32 }}>
         {t('donations.title') || 'Donation Board'}
       </h1>
+
 
       {/* Controls */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
@@ -222,6 +248,7 @@ const DonationBoardPage = () => {
           </select>
         </div>
       </div>
+
 
       {/* Post Donation Form */}
       {showPostForm && (
@@ -306,6 +333,7 @@ const DonationBoardPage = () => {
         </div>
       )}
 
+
       {/* Donations List */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
         <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Available Donations</h2>
@@ -360,7 +388,9 @@ const DonationBoardPage = () => {
                   </div>
                 </div>
 
+
                 <p style={{ margin: '8px 0', color: '#333' }}>{donation.description}</p>
+
 
                 <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
                   Donated by: {donation.donor}
@@ -373,6 +403,7 @@ const DonationBoardPage = () => {
                   )}
                 </div>
 
+
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     onClick={() => handleContact(donation)}
@@ -380,6 +411,7 @@ const DonationBoardPage = () => {
                   >
                     Contact
                   </button>
+
 
                   {}
                   {donation.status === 'available' && (
@@ -390,6 +422,7 @@ const DonationBoardPage = () => {
                       Claim
                     </button>
                   )}
+
 
                   {}
                   {donation.status === 'matched' && donation.matchedRequest?.contact && (
@@ -418,4 +451,7 @@ const DonationBoardPage = () => {
   );
 };
 
+
 export default DonationBoardPage;
+
+

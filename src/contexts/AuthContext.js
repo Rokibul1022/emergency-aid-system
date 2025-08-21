@@ -1,23 +1,69 @@
-import React, { createContext, useContext, useReducer, useEffect, useState } from 'react';
-import { 
-  signUpWithEmail, 
-  signInWithEmail, 
-  signInWithGoogle, 
-  signOutUser, 
-  getCurrentUserData, 
-  updateUserProfile,
-  onAuthStateChangedListener,
+import { createContext, useContext, useEffect, useReducer, useState } from 'react';
+import {
   forceCreateUserDocument,
-  USER_ROLES 
+  getCurrentUserData,
+  onAuthStateChangedListener,
+  signInWithEmail,
+  signInWithGoogle,
+  signOutUser,
+  signUpWithEmail,
+  updateUserProfile,
+  USER_ROLES
 } from '../firebase/auth';
-import { db } from '../firebase/config';
-import { doc, setDoc } from 'firebase/firestore';
+
+// Factory class for creating user data based on role
+class UserFactory {
+  static createUserData(user, role, additionalData = {}) {
+    const baseUserData = {
+      displayName: user.displayName || user.email?.split('@')[0] || 'User',
+      email: user.email,
+      photoURL: user.photoURL || null,
+      role,
+      createdAt: new Date(),
+      verified: false,
+      phone: additionalData.phone || ''
+    };
+
+    switch (role) {
+      case USER_ROLES.REQUESTER:
+        return {
+          ...baseUserData,
+          emergencyRequests: [],
+          preferences: {
+            notifications: true,
+            language: 'en'
+          }
+        };
+      case USER_ROLES.VOLUNTEER:
+        return {
+          ...baseUserData,
+          availability: {
+            isAvailable: true,
+            lastUpdated: new Date()
+          },
+          assignedRequests: [],
+          skills: []
+        };
+      case USER_ROLES.ADMIN:
+        return {
+          ...baseUserData,
+          adminPrivileges: {
+            canManageUsers: true,
+            canManageRequests: true,
+            canViewReports: true
+          }
+        };
+      default:
+        throw new Error(`Unsupported role: ${role}`);
+    }
+  }
+}
 
 const AuthContext = createContext();
 
 const initialState = {
   user: null,
-  userData: null, // Firestore user data
+  userData: null,
   isAuthenticated: false,
   isLoading: true,
   role: null,
@@ -72,12 +118,10 @@ export const AuthProvider = ({ children }) => {
   const [state, dispatch] = useReducer(authReducer, initialState);
   const [authProcessed, setAuthProcessed] = useState(false);
 
-  // Listen to Firebase auth state changes
   useEffect(() => {
     const unsubscribe = onAuthStateChangedListener(async (user) => {
       console.log('Auth state changed - User:', user?.uid);
       
-      // Prevent multiple auth processing
       if (authProcessed && state.user?.uid === user?.uid) {
         console.log('Auth already processed for this user, skipping');
         return;
@@ -85,61 +129,33 @@ export const AuthProvider = ({ children }) => {
       
       if (user) {
         try {
-          // Get user data from Firestore
           let userData = await getCurrentUserData(user.uid);
           
-          // Simplified auth flow - always dispatch success if user exists
           if (userData && userData.role) {
-            // User exists and has a role
-                          dispatch({
-                type: 'AUTH_SUCCESS',
-                payload: { user, userData },
-              });
-              setAuthProcessed(true);
-            } else {
-            // User exists but no role, or user doesn't exist
+            dispatch({
+              type: 'AUTH_SUCCESS',
+              payload: { user, userData },
+            });
+            setAuthProcessed(true);
+          } else {
+            console.log('No role found, creating user document with requester role');
+            
             try {
-              console.log('No role found, creating user document with requester role');
-              
-              // Create basic user data first
-              const basicUserData = {
-                displayName: user.displayName || user.email?.split('@')[0] || 'User',
-                email: user.email,
-                photoURL: user.photoURL || null,
-                role: USER_ROLES.REQUESTER,
-                createdAt: new Date(),
-                verified: false,
-                phone: ''
-              };
-              
-              // Dispatch success immediately with basic data
+              const basicUserData = UserFactory.createUserData(user, USER_ROLES.REQUESTER);
               dispatch({
                 type: 'AUTH_SUCCESS',
                 payload: { user, userData: basicUserData },
               });
               
-              // Then try to create/update the document in background
               try {
-                await forceCreateUserDocument(user, USER_ROLES.REQUESTER);
+                await forceCreateUserDocument(user, USER_ROLES.REQUESTER, basicUserData);
                 console.log('User document created successfully in background');
               } catch (createError) {
                 console.error('Background user document creation failed:', createError);
-                // Don't fail auth, just log the error
               }
-              
             } catch (error) {
               console.error('Error in auth flow:', error);
-              // Still dispatch success to prevent logout
-              const basicUserData = {
-                displayName: user.displayName || user.email?.split('@')[0] || 'User',
-                email: user.email,
-                photoURL: user.photoURL || null,
-                role: USER_ROLES.REQUESTER,
-                createdAt: new Date(),
-                verified: false,
-                phone: ''
-              };
-              
+              const basicUserData = UserFactory.createUserData(user, USER_ROLES.REQUESTER);
               dispatch({
                 type: 'AUTH_SUCCESS',
                 payload: { user, userData: basicUserData },
@@ -163,21 +179,25 @@ export const AuthProvider = ({ children }) => {
     try {
       const result = await signUpWithEmail(email, password, displayName, role, { phone });
       let userData = await getCurrentUserData(result.user.uid);
+      
       if (!userData) {
-        await updateUserProfile(result.user.uid, { role, phone });
+        userData = UserFactory.createUserData(result.user, role, { phone });
+        await updateUserProfile(result.user.uid, userData);
         userData = await getCurrentUserData(result.user.uid);
       }
+      
       dispatch({
         type: 'AUTH_SUCCESS',
         payload: { user: result.user, userData },
       });
-      // Refetch userData to ensure latest info
+      
       setTimeout(async () => {
         const refreshedUserData = await getCurrentUserData(result.user.uid);
         if (refreshedUserData) {
           dispatch({ type: 'UPDATE_USER_DATA', payload: refreshedUserData });
         }
       }, 500);
+      
       return { success: true };
     } catch (error) {
       console.error('Signup failed:', error);
@@ -191,28 +211,25 @@ export const AuthProvider = ({ children }) => {
     try {
       const user = await signInWithEmail(email, password);
       let userData = await getCurrentUserData(user.uid);
+      
       if (!userData) {
-        userData = {
-          displayName: user.displayName || user.email?.split('@')[0] || 'User',
-          email: user.email,
-          photoURL: user.photoURL || null,
-          role: USER_ROLES.REQUESTER,
-          createdAt: new Date(),
-          verified: false,
-          phone: ''
-        };
+        userData = UserFactory.createUserData(user, USER_ROLES.REQUESTER);
+        await updateUserProfile(user.uid, userData);
+        userData = await getCurrentUserData(user.uid);
       }
+      
       dispatch({
         type: 'AUTH_SUCCESS',
         payload: { user, userData },
       });
-      // Refetch userData to ensure latest info
+      
       setTimeout(async () => {
         const refreshedUserData = await getCurrentUserData(user.uid);
         if (refreshedUserData) {
           dispatch({ type: 'UPDATE_USER_DATA', payload: refreshedUserData });
         }
       }, 500);
+      
       return { success: true };
     } catch (error) {
       console.error('Login failed:', error);
@@ -223,22 +240,14 @@ export const AuthProvider = ({ children }) => {
 
   const loginWithGoogle = async (role = USER_ROLES.REQUESTER) => {
     dispatch({ type: 'AUTH_START' });
-    
     try {
       const user = await signInWithGoogle(role);
       let userData = await getCurrentUserData(user.uid);
       
-      // If no userData, create basic userData
       if (!userData) {
-        userData = {
-          displayName: user.displayName || user.email?.split('@')[0] || 'User',
-          email: user.email,
-          photoURL: user.photoURL || null,
-          role: USER_ROLES.REQUESTER,
-          createdAt: new Date(),
-          verified: false,
-          phone: ''
-        };
+        userData = UserFactory.createUserData(user, role);
+        await updateUserProfile(user.uid, userData);
+        userData = await getCurrentUserData(user.uid);
       }
       
       dispatch({
@@ -264,7 +273,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Filter out undefined/null fields (especially location.address)
   const filterUndefined = (obj) => {
     if (!obj || typeof obj !== 'object') return obj;
     const filtered = {};
@@ -315,4 +323,4 @@ export const useAuth = () => {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-}; 
+};

@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+
+
+
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../contexts/AuthContext';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import './AuthPages.css';
 
 const LoginPage = () => {
   const { t } = useTranslation();
-  const { login, loginWithGoogle } = useAuth();
+  const { login, loginWithGoogle, USER_ROLES } = useAuth();
   const { addNotification } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -15,6 +18,7 @@ const LoginPage = () => {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
+    role: USER_ROLES.REQUESTER, // Default role
   });
 
   const [errors, setErrors] = useState({});
@@ -30,7 +34,6 @@ const LoginPage = () => {
       [name]: value
     }));
     
-    // Clear error when user starts typing
     if (errors[name]) {
       setErrors(prev => ({
         ...prev,
@@ -87,7 +90,7 @@ const LoginPage = () => {
     setIsGoogleLoading(true);
     
     try {
-      const result = await loginWithGoogle();
+      const result = await loginWithGoogle(formData.role);
       
       if (result.success) {
         addNotification('Google login successful!', 'success');
@@ -142,6 +145,26 @@ const LoginPage = () => {
               {errors.password && <span className="error-message">{errors.password}</span>}
             </div>
 
+            <div className="form-group">
+              <label htmlFor="role">{t('auth.role')}</label>
+              <select
+                id="role"
+                name="role"
+                value={formData.role}
+                onChange={handleChange}
+                className="role-select"
+              >
+                <option value={USER_ROLES.REQUESTER}>{t('auth.requester')}</option>
+                <option value={USER_ROLES.VOLUNTEER}>{t('auth.volunteer')}</option>
+                <option value={USER_ROLES.ADMIN}>{t('auth.admin')}</option>
+              </select>
+              <small className="role-description">
+                {formData.role === USER_ROLES.REQUESTER && 'Submit emergency requests and track their status'}
+                {formData.role === USER_ROLES.VOLUNTEER && 'Help others by responding to emergency requests'}
+                {formData.role === USER_ROLES.ADMIN && 'Manage the system and oversee operations'}
+              </small>
+            </div>
+
             <div className="form-actions">
               <button
                 type="submit"
@@ -186,4 +209,5 @@ const LoginPage = () => {
   );
 };
 
-export default LoginPage; 
+export default LoginPage;
+
