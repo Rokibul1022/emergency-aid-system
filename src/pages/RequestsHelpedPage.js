@@ -2,128 +2,74 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { db } from '../firebase/config';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 const RequestsHelpedPage = () => {
   const { t } = useTranslation();
   const { addNotification } = useApp();
   const { user } = useAuth();
-  const [requests, setRequests] = useState([]);
+  const [donations, setDonations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Mock data for helped requests
-  const mockRequests = [
-    {
-      id: 1,
-      title: 'Medical Emergency - Heart Attack',
-      description: 'Elderly man experiencing chest pain and shortness of breath',
-      category: 'Medical',
-      urgency: 'Critical',
-      status: 'completed',
-      requesterName: 'John Smith',
-      volunteerName: 'Dr. Sarah Johnson',
-      location: 'Downtown Medical Center',
-      completedDate: '2024-01-15',
-      responseTime: '3 minutes',
-      rating: 5,
-      feedback: 'Excellent response time and professional care provided.'
-    },
-    {
-      id: 2,
-      title: 'Food & Water Crisis',
-      description: 'Family of 4 stranded without food for 2 days',
-      category: 'Food & Water',
-      urgency: 'High',
-      status: 'completed',
-      requesterName: 'Maria Garcia',
-      volunteerName: 'Mike Chen',
-      location: 'Westside Community',
-      completedDate: '2024-01-14',
-      responseTime: '15 minutes',
-      rating: 5,
-      feedback: 'Volunteer was very kind and provided more than we needed.'
-    },
-    {
-      id: 3,
-      title: 'Shelter Needed - Homeless Family',
-      description: 'Family with 2 children need temporary shelter',
-      category: 'Shelter',
-      urgency: 'High',
-      status: 'completed',
-      requesterName: 'David Wilson',
-      volunteerName: 'Emma Rodriguez',
-      location: 'North District Shelter',
-      completedDate: '2024-01-13',
-      responseTime: '25 minutes',
-      rating: 4,
-      feedback: 'Found us a safe place to stay for the night.'
-    },
-    {
-      id: 4,
-      title: 'Transportation Emergency',
-      description: 'Pregnant woman needs urgent transport to hospital',
-      category: 'Transport',
-      urgency: 'Critical',
-      status: 'completed',
-      requesterName: 'Lisa Thompson',
-      volunteerName: 'David Kim',
-      location: 'Eastside Hospital',
-      completedDate: '2024-01-12',
-      responseTime: '8 minutes',
-      rating: 5,
-      feedback: 'Saved my baby\'s life. Forever grateful!'
-    },
-    {
-      id: 5,
-      title: 'Medical Supplies Needed',
-      description: 'Diabetes patient needs insulin urgently',
-      category: 'Medical',
-      urgency: 'High',
-      status: 'completed',
-      requesterName: 'Robert Brown',
-      volunteerName: 'Lisa Thompson',
-      location: 'South District Pharmacy',
-      completedDate: '2024-01-11',
-      responseTime: '12 minutes',
-      rating: 5,
-      feedback: 'Quick response and professional assistance.'
-    }
-  ];
-
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setRequests(mockRequests);
+    // Fetch real donations from Firestore
+    const unsubscribe = onSnapshot(collection(db, 'donations'), (querySnapshot) => {
+      const donationsData = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data() || {};
+        donationsData.push({
+          id: doc.id,
+          title: data.description || 'Unnamed Donation', // Using description as title
+          description: data.description || '',
+          category: data.category || 'Other',
+          urgency: 'Completed', // Static since all are assumed completed
+          status: 'completed', // Static since all are assumed completed
+          requesterName: data.donorName || 'Unknown Donor',
+          volunteerName: data.claimedByName || 'Unclaimed',
+          completedDate: data.approvedAt 
+            ? (data.approvedAt.toDate ? data.approvedAt.toDate().toLocaleString() : data.approvedAt.toString())
+            : 'N/A',
+          responseTime: 'N/A', // Not in schema, default to N/A
+          rating: 0, // Not in schema, default to 0
+          feedback: 'N/A' // Not in schema, default to N/A
+        });
+      });
+      setDonations(donationsData);
       setLoading(false);
-    }, 1000);
+    }, (error) => {
+      console.error('Error fetching donations:', error);
+      addNotification('Failed to load donations', 'error');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const handleViewDetails = (request) => {
-    addNotification(`Viewing details for request: ${request.title}`, 'info');
+  const handleViewDetails = (donation) => {
+    addNotification(`Viewing details for donation: ${donation.title}`, 'info');
     // In real app, this would navigate to detailed view
   };
 
-  const handleContactVolunteer = (request) => {
-    addNotification(`Contacting volunteer: ${request.volunteerName}`, 'info');
+  const handleContactVolunteer = (donation) => {
+    addNotification(`Contacting volunteer: ${donation.volunteerName}`, 'info');
     // In real app, this would open chat or contact form
   };
 
-  const filteredRequests = requests.filter(request => {
-    const matchesSearch = request.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         request.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         request.requesterName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         request.volunteerName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filter === 'all' || request.category === filter;
+  const filteredDonations = donations.filter(donation => {
+    const matchesSearch = (donation.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (donation.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (donation.requesterName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (donation.volunteerName || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filter === 'all' || (donation.category || '').toLowerCase() === filter.toLowerCase();
     return matchesSearch && matchesFilter;
   });
 
   const getUrgencyColor = (urgency) => {
     switch (urgency) {
-      case 'Critical': return '#e53e3e';
-      case 'High': return '#d69e2e';
-      case 'Medium': return '#3182ce';
-      case 'Low': return '#38a169';
+      case 'Completed': return '#38a169'; // Static color for completed donations
       default: return '#718096';
     }
   };
@@ -131,8 +77,6 @@ const RequestsHelpedPage = () => {
   const getStatusColor = (status) => {
     switch (status) {
       case 'completed': return '#38a169';
-      case 'in-progress': return '#d69e2e';
-      case 'pending': return '#3182ce';
       default: return '#718096';
     }
   };
@@ -146,7 +90,7 @@ const RequestsHelpedPage = () => {
         alignItems: 'center',
         justifyContent: 'center'
       }}>
-        <div style={{ color: '#fff', fontSize: '1.2rem' }}>Loading helped requests...</div>
+        <div style={{ color: '#fff', fontSize: '1.2rem' }}>Loading helped donations...</div>
       </div>
     );
   }
@@ -177,7 +121,7 @@ const RequestsHelpedPage = () => {
           WebkitBackgroundClip: 'text',
           WebkitTextFillColor: 'transparent'
         }}>
-          Requests Helped
+          Donations Helped
         </h1>
 
         {/* Stats Summary */}
@@ -191,18 +135,18 @@ const RequestsHelpedPage = () => {
           borderRadius: 12
         }}>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>{requests.length}</div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>{donations.length}</div>
             <div style={{ color: '#4a5568' }}>Total Helped</div>
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>
-              {(requests.reduce((sum, r) => sum + r.rating, 0) / requests.length).toFixed(1)}
+              {(donations.reduce((sum, d) => sum + d.rating, 0) / donations.length).toFixed(1)}
             </div>
             <div style={{ color: '#4a5568' }}>Avg Rating</div>
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>
-              {Math.round(requests.reduce((sum, r) => sum + parseInt(r.responseTime), 0) / requests.length)}
+              N/A
             </div>
             <div style={{ color: '#4a5568' }}>Avg Response (min)</div>
           </div>
@@ -218,7 +162,7 @@ const RequestsHelpedPage = () => {
         }}>
           <input
             type="text"
-            placeholder="Search requests..."
+            placeholder="Search donations..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -250,14 +194,14 @@ const RequestsHelpedPage = () => {
           </select>
         </div>
 
-        {/* Requests Grid */}
+        {/* Donations Grid */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))',
           gap: 24
         }}>
-          {filteredRequests.map((request) => (
-            <div key={request.id} style={{
+          {filteredDonations.map((donation) => (
+            <div key={donation.id} style={{
               background: '#fff',
               borderRadius: 16,
               padding: 24,
@@ -273,7 +217,7 @@ const RequestsHelpedPage = () => {
               e.currentTarget.style.transform = 'translateY(0)';
               e.currentTarget.style.boxShadow = 'none';
             }}
-            onClick={() => handleViewDetails(request)}
+            onClick={() => handleViewDetails(donation)}
             >
               <div style={{
                 display: 'flex',
@@ -288,7 +232,7 @@ const RequestsHelpedPage = () => {
                     color: '#2d3748',
                     marginBottom: 8
                   }}>
-                    {request.title}
+                    {donation.title}
                   </h3>
                   <p style={{
                     fontSize: '0.9rem',
@@ -296,7 +240,7 @@ const RequestsHelpedPage = () => {
                     lineHeight: 1.5,
                     marginBottom: 12
                   }}>
-                    {request.description}
+                    {donation.description}
                   </p>
                 </div>
                 <div style={{
@@ -306,17 +250,17 @@ const RequestsHelpedPage = () => {
                   gap: 8
                 }}>
                   <span style={{
-                    background: getUrgencyColor(request.urgency),
+                    background: getUrgencyColor(donation.urgency),
                     color: '#fff',
                     padding: '4px 8px',
                     borderRadius: 12,
                     fontSize: '0.8rem',
                     fontWeight: '600'
                   }}>
-                    {request.urgency}
+                    {donation.urgency}
                   </span>
                   <span style={{
-                    background: getStatusColor(request.status),
+                    background: getStatusColor(donation.status),
                     color: '#fff',
                     padding: '4px 8px',
                     borderRadius: 12,
@@ -324,7 +268,7 @@ const RequestsHelpedPage = () => {
                     fontWeight: '600',
                     textTransform: 'capitalize'
                   }}>
-                    {request.status}
+                    {donation.status}
                   </span>
                 </div>
               </div>
@@ -336,20 +280,20 @@ const RequestsHelpedPage = () => {
                 marginBottom: 16
               }}>
                 <div>
-                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Requester</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{request.requesterName}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Donor</div>
+                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{donation.requesterName}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Volunteer</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{request.volunteerName}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Claimed By</div>
+                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{donation.volunteerName}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Location</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>{request.location}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Amount</div>
+                  <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>{donation.amount || 'N/A'}</div>
                 </div>
                 <div>
                   <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Response Time</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{request.responseTime}</div>
+                  <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>{donation.responseTime}</div>
                 </div>
               </div>
 
@@ -362,13 +306,13 @@ const RequestsHelpedPage = () => {
                 <span style={{ fontSize: '0.8rem', color: '#718096' }}>Rating:</span>
                 <div style={{ display: 'flex', gap: 2 }}>
                   {[1, 2, 3, 4, 5].map((star) => (
-                    <span key={star} style={{ color: star <= request.rating ? '#fbbf24' : '#e2e8f0' }}>
+                    <span key={star} style={{ color: star <= donation.rating ? '#fbbf24' : '#e2e8f0' }}>
                       ⭐
                     </span>
                   ))}
                 </div>
                 <span style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>
-                  {request.rating}/5
+                  {donation.rating}/5
                 </span>
               </div>
 
@@ -383,7 +327,7 @@ const RequestsHelpedPage = () => {
                   borderRadius: 8,
                   borderLeft: '3px solid #667eea'
                 }}>
-                  "{request.feedback}"
+                  "{donation.feedback}"
                 </div>
               </div>
 
@@ -394,7 +338,7 @@ const RequestsHelpedPage = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleViewDetails(request);
+                    handleViewDetails(donation);
                   }}
                   style={{
                     flex: 1,
@@ -413,7 +357,7 @@ const RequestsHelpedPage = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleContactVolunteer(request);
+                    handleContactVolunteer(donation);
                   }}
                   style={{
                     flex: 1,
@@ -434,14 +378,14 @@ const RequestsHelpedPage = () => {
           ))}
         </div>
 
-        {filteredRequests.length === 0 && (
+        {filteredDonations.length === 0 && (
           <div style={{
             textAlign: 'center',
             padding: '60px 20px',
             color: '#718096'
           }}>
             <div style={{ fontSize: '3rem', marginBottom: 16 }}>🔍</div>
-            <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>No requests found</div>
+            <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>No donations found</div>
             <div>Try adjusting your search or filter criteria</div>
           </div>
         )}
@@ -450,4 +394,4 @@ const RequestsHelpedPage = () => {
   );
 };
 
-export default RequestsHelpedPage; 
+export default RequestsHelpedPage;

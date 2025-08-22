@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { db } from '../firebase/config';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 const EmergencySheltersPage = () => {
   const { t } = useTranslation();
@@ -12,86 +14,35 @@ const EmergencySheltersPage = () => {
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Mock data for emergency shelters
-  const mockShelters = [
-    {
-      id: 1,
-      name: 'Downtown Emergency Shelter',
-      location: '123 Main Street, Downtown',
-      capacity: 200,
-      availableSlots: 45,
-      status: 'open',
-      contact: '+1-555-0101',
-      email: 'downtown@shelter.org',
-      services: ['Food', 'Medical', 'Showers', 'Beds'],
-      hours: '24/7',
-      rating: 4.5,
-      description: 'Large emergency shelter with comprehensive services for families and individuals.'
-    },
-    {
-      id: 2,
-      name: 'Westside Community Center',
-      location: '456 Oak Avenue, Westside',
-      capacity: 150,
-      availableSlots: 12,
-      status: 'open',
-      contact: '+1-555-0102',
-      email: 'westside@community.org',
-      services: ['Food', 'Beds', 'Counseling'],
-      hours: '6AM-10PM',
-      rating: 4.2,
-      description: 'Community-focused shelter with emphasis on family support and counseling.'
-    },
-    {
-      id: 3,
-      name: 'North District Safe Haven',
-      location: '789 Pine Street, North District',
-      capacity: 100,
-      availableSlots: 0,
-      status: 'full',
-      contact: '+1-555-0103',
-      email: 'north@safehaven.org',
-      services: ['Food', 'Medical', 'Beds', 'Security'],
-      hours: '24/7',
-      rating: 4.8,
-      description: 'High-security shelter with medical facilities and 24/7 staff support.'
-    },
-    {
-      id: 4,
-      name: 'Eastside Youth Shelter',
-      location: '321 Elm Street, Eastside',
-      capacity: 80,
-      availableSlots: 25,
-      status: 'open',
-      contact: '+1-555-0104',
-      email: 'youth@eastside.org',
-      services: ['Food', 'Education', 'Beds', 'Recreation'],
-      hours: '24/7',
-      rating: 4.6,
-      description: 'Specialized shelter for youth with educational and recreational programs.'
-    },
-    {
-      id: 5,
-      name: 'South District Family Center',
-      location: '654 Maple Drive, South District',
-      capacity: 120,
-      availableSlots: 8,
-      status: 'open',
-      contact: '+1-555-0105',
-      email: 'family@south.org',
-      services: ['Food', 'Medical', 'Childcare', 'Beds'],
-      hours: '24/7',
-      rating: 4.7,
-      description: 'Family-oriented shelter with childcare services and family support programs.'
-    }
-  ];
-
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setShelters(mockShelters);
+    // Fetch real shelters from Firestore
+    const unsubscribe = onSnapshot(collection(db, 'shelters'), (querySnapshot) => {
+      const sheltersData = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data() || {};
+        sheltersData.push({
+          id: doc.id,
+          name: data.name || 'Unnamed Shelter',
+          capacity: parseInt(data.capacity) || 0,
+          occupied: parseInt(data.occupied) || 0,
+          availableSlots: Math.max(0, (parseInt(data.capacity) || 0) - (parseInt(data.occupied) || 0)),
+          status: data.status || 'unknown',
+          contact: data.contact || '',
+          description: data.description || '',
+          createdAt: data.createdAt 
+            ? (data.createdAt.toDate ? data.createdAt.toDate().toLocaleString() : data.createdAt.toString())
+            : 'N/A'
+        });
+      });
+      setShelters(sheltersData);
       setLoading(false);
-    }, 1000);
+    }, (error) => {
+      console.error('Error fetching shelters:', error);
+      addNotification('Failed to load shelters', 'error');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const handleContact = (shelter) => {
@@ -101,19 +52,17 @@ const EmergencySheltersPage = () => {
 
   const handleGetDirections = (shelter) => {
     addNotification(`Getting directions to ${shelter.name}...`, 'info');
-    // In real app, this would open maps
+    // In real app, this would open maps (note: removed location, so this is a placeholder)
   };
 
   const filteredShelters = shelters.filter(shelter => {
-    const matchesSearch = shelter.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         shelter.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         shelter.services.some(s => s.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesFilter = filter === 'all' || shelter.status === filter;
+    const matchesSearch = (shelter.name || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filter === 'all' || (shelter.status || '').toLowerCase() === filter.toLowerCase();
     return matchesSearch && matchesFilter;
   });
 
   const getStatusColor = (status) => {
-    switch (status) {
+    switch ((status || '').toLowerCase()) {
       case 'open': return '#38a169';
       case 'full': return '#e53e3e';
       case 'maintenance': return '#d69e2e';
@@ -121,8 +70,10 @@ const EmergencySheltersPage = () => {
     }
   };
 
-  const getOccupancyPercentage = (available, capacity) => {
-    return Math.round(((capacity - available) / capacity) * 100);
+  const getOccupancyPercentage = (occupied, capacity) => {
+    const occ = parseInt(occupied) || 0;
+    const cap = parseInt(capacity) || 1; // Avoid division by zero
+    return cap > 0 ? Math.round((occ / cap) * 100) : 0;
   };
 
   if (loading) {
@@ -184,13 +135,13 @@ const EmergencySheltersPage = () => {
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>
-              {shelters.filter(s => s.status === 'open').length}
+              {shelters.filter(s => (s.status || '').toLowerCase() === 'open').length}
             </div>
             <div style={{ color: '#4a5568' }}>Currently Open</div>
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#667eea' }}>
-              {shelters.reduce((sum, s) => sum + s.availableSlots, 0)}
+              {shelters.reduce((sum, s) => sum + (s.availableSlots || 0), 0)}
             </div>
             <div style={{ color: '#4a5568' }}>Available Slots</div>
           </div>
@@ -257,8 +208,7 @@ const EmergencySheltersPage = () => {
             onMouseLeave={(e) => {
               e.currentTarget.style.transform = 'translateY(0)';
               e.currentTarget.style.boxShadow = 'none';
-            }}
-            >
+            }}>
               <div style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -300,16 +250,6 @@ const EmergencySheltersPage = () => {
                   }}>
                     {shelter.status}
                   </span>
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4
-                  }}>
-                    <span style={{ fontSize: '0.8rem', color: '#718096' }}>⭐</span>
-                    <span style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>
-                      {shelter.rating}
-                    </span>
-                  </div>
                 </div>
               </div>
 
@@ -320,12 +260,8 @@ const EmergencySheltersPage = () => {
                 marginBottom: 16
               }}>
                 <div>
-                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Location</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>{shelter.location}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Hours</div>
-                  <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>{shelter.hours}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Contact</div>
+                  <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>{shelter.contact}</div>
                 </div>
                 <div>
                   <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Capacity</div>
@@ -336,7 +272,7 @@ const EmergencySheltersPage = () => {
                 <div>
                   <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 4 }}>Occupancy</div>
                   <div style={{ fontSize: '0.9rem', color: '#2d3748', fontWeight: '500' }}>
-                    {getOccupancyPercentage(shelter.availableSlots, shelter.capacity)}%
+                    {getOccupancyPercentage(shelter.occupied, shelter.capacity)}%
                   </div>
                 </div>
               </div>
@@ -351,12 +287,12 @@ const EmergencySheltersPage = () => {
                   overflow: 'hidden'
                 }}>
                   <div style={{
-                    width: `${getOccupancyPercentage(shelter.availableSlots, shelter.capacity)}%`,
+                    width: `${getOccupancyPercentage(shelter.occupied, shelter.capacity)}%`,
                     height: '100%',
-                    background: getOccupancyPercentage(shelter.availableSlots, shelter.capacity) > 80 
-                      ? '#e53e3e' 
-                      : getOccupancyPercentage(shelter.availableSlots, shelter.capacity) > 60 
-                      ? '#d69e2e' 
+                    background: getOccupancyPercentage(shelter.occupied, shelter.capacity) > 80
+                      ? '#e53e3e'
+                      : getOccupancyPercentage(shelter.occupied, shelter.capacity) > 60
+                      ? '#d69e2e'
                       : '#38a169',
                     transition: 'width 0.3s ease'
                   }}></div>
@@ -364,24 +300,9 @@ const EmergencySheltersPage = () => {
               </div>
 
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 8 }}>Services</div>
-                <div style={{
-                  display: 'flex',
-                  gap: 8,
-                  flexWrap: 'wrap'
-                }}>
-                  {shelter.services.map((service, index) => (
-                    <span key={index} style={{
-                      background: 'rgba(102, 126, 234, 0.1)',
-                      color: '#667eea',
-                      padding: '4px 8px',
-                      borderRadius: 12,
-                      fontSize: '0.8rem',
-                      fontWeight: '500'
-                    }}>
-                      {service}
-                    </span>
-                  ))}
+                <div style={{ fontSize: '0.8rem', color: '#718096', marginBottom: 8 }}>Created At</div>
+                <div style={{ fontSize: '0.9rem', color: '#2d3748' }}>
+                  {shelter.createdAt}
                 </div>
               </div>
 
@@ -442,4 +363,4 @@ const EmergencySheltersPage = () => {
   );
 };
 
-export default EmergencySheltersPage; 
+export default EmergencySheltersPage;
