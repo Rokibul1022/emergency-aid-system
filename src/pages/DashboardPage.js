@@ -13,6 +13,366 @@ import { createPanicAlert } from '../firebase/alerts';
 import donationService from '../firebase/mergedDonationService';
 import './DashboardPage.css';
 
+
+// Strategy Pattern: Define interface for data loading strategy
+class DashboardDataStrategy {
+  async loadData(user, setStats, setRecentRequests, setAskedDonations) {}
+  subscribeToRealTimeUpdates(user, setStats, setRecentRequests, setAskedDonations) {}
+}
+
+
+class RequesterDataStrategy extends DashboardDataStrategy {
+  async loadData(user, setStats, setRecentRequests, setAskedDonations) {
+    const userRequests = await getRequestsByRequester(user.uid);
+    const userAskedDonations = await donationService.getAskedDonationsByRequester(user.uid);
+    
+    const pendingRequests = userRequests.filter(req => req.status === 'pending');
+    const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+    const completedRequests = userRequests.filter(req => req.status === 'resolved');
+    
+    const newStats = {
+      requests: userRequests.length,
+      active: activeRequests.length,
+      completed: completedRequests.length,
+      pending: pendingRequests.length,
+    };
+    
+    setStats(newStats);
+    setRecentRequests(userRequests.slice(0, 5));
+    setAskedDonations(userAskedDonations);
+  }
+
+
+  subscribeToRealTimeUpdates(user, setStats, setRecentRequests, setAskedDonations) {
+    const unsubscribeRequests = subscribeToRequests((requests) => {
+      const userRequests = requests.filter(req => req.requesterId === user.uid);
+      
+      setRecentRequests(userRequests.slice(0, 5));
+      
+      const pendingRequests = userRequests.filter(req => req.status === 'pending');
+      const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+      const completedRequests = userRequests.filter(req => req.status === 'resolved');
+      
+      const newStats = {
+        requests: userRequests.length,
+        active: activeRequests.length,
+        completed: completedRequests.length,
+        pending: pendingRequests.length,
+      };
+      
+      setStats(newStats);
+    }, { requesterId: user.uid });
+
+
+    const unsubscribeDonations = donationService.subscribeToAskedDonations((askedDonationsData) => {
+      const userAskedDonations = askedDonationsData.filter(ask => ask.requesterId === user.uid);
+      setAskedDonations(userAskedDonations);
+    }, { requesterId: user.uid });
+
+
+    return () => {
+      unsubscribeRequests();
+      unsubscribeDonations();
+    };
+  }
+}
+
+
+class VolunteerDataStrategy extends DashboardDataStrategy {
+  async loadData(user, setStats, setRecentRequests, setAskedDonations) {
+    const { getOpenRequests } = await import('../firebase/requests');
+    const assignedRequests = await getRequestsByVolunteer(user.uid);
+    const allRequests = await getOpenRequests(100);
+    const nearbyPendingRequests = allRequests.filter(req => req.status === 'pending');
+    
+    const userRequests = [...assignedRequests, ...nearbyPendingRequests];
+    const uniqueRequests = [...new Set(userRequests.map(req => req.id))].map(id => 
+      userRequests.find(req => req.id === id)
+    );
+    
+    const pendingRequests = uniqueRequests.filter(req => req.status === 'pending');
+    const activeRequests = uniqueRequests.filter(req => req.status === 'in-progress' && req.assignedVolunteerId === user.uid);
+    const completedRequests = uniqueRequests.filter(req => req.status === 'resolved' && req.assignedVolunteerId === user.uid);
+    
+    const newStats = {
+      requests: uniqueRequests.length,
+      active: activeRequests.length,
+      completed: completedRequests.length,
+      pending: pendingRequests.length,
+    };
+    
+    setStats(newStats);
+    setRecentRequests(uniqueRequests.slice(0, 5));
+    setAskedDonations([]);
+  }
+
+
+  subscribeToRealTimeUpdates(user, setStats, setRecentRequests, setAskedDonations) {
+    return subscribeToRequests((requests) => {
+      const assignedRequests = requests.filter(req => req.assignedVolunteerId === user.uid);
+      const pendingRequests = requests.filter(req => req.status === 'pending');
+      
+      const allVolunteerRequests = [...assignedRequests, ...pendingRequests];
+      const uniqueRequests = [...new Set(allVolunteerRequests.map(req => req.id))].map(id => 
+        allVolunteerRequests.find(req => req.id === id)
+      );
+      
+      setRecentRequests(uniqueRequests.slice(0, 5));
+      
+      const volunteerPending = uniqueRequests.filter(req => req.status === 'pending');
+      const volunteerActive = uniqueRequests.filter(req => req.status === 'in-progress' && req.assignedVolunteerId === user.uid);
+      const volunteerCompleted = uniqueRequests.filter(req => req.status === 'resolved' && req.assignedVolunteerId === user.uid);
+      
+      const newStats = {
+        requests: uniqueRequests.length,
+        active: volunteerActive.length,
+        completed: volunteerCompleted.length,
+        pending: volunteerPending.length,
+      };
+      
+      setStats(newStats);
+      setAskedDonations([]);
+    });
+  }
+}
+
+
+class AdminDataStrategy extends DashboardDataStrategy {
+  async loadData(user, setStats, setRecentRequests, setAskedDonations) {
+    const { getOpenRequests } = await import('../firebase/requests');
+    const userRequests = await getOpenRequests(100);
+    
+    const pendingRequests = userRequests.filter(req => req.status === 'pending');
+    const activeRequests = userRequests.filter(req => req.status === 'in-progress');
+    const completedRequests = userRequests.filter(req => req.status === 'resolved');
+    
+    const newStats = {
+      requests: userRequests.length,
+      active: activeRequests.length,
+      completed: completedRequests.length,
+      pending: pendingRequests.length,
+    };
+    
+    setStats(newStats);
+    setRecentRequests(userRequests.slice(0, 5));
+    setAskedDonations([]);
+  }
+
+
+  subscribeToRealTimeUpdates(user, setStats, setRecentRequests, setAskedDonations) {
+    return subscribeToRequests((requests) => {
+      setRecentRequests(requests.slice(0, 5));
+      
+      const pendingRequests = requests.filter(req => req.status === 'pending');
+      const activeRequests = requests.filter(req => req.status === 'in-progress');
+      const completedRequests = requests.filter(req => req.status === 'resolved');
+      
+      const newStats = {
+        requests: requests.length,
+        active: activeRequests.length,
+        completed: completedRequests.length,
+        pending: pendingRequests.length,
+      };
+      
+      setStats(newStats);
+      setAskedDonations([]);
+    });
+  }
+}
+
+
+// Factory Method Pattern: Define factory for creating role-based content
+class DashboardContent {
+  getContent(userData, user, t, setShowAskDonationForm) {}
+}
+
+
+class RequesterDashboardContent extends DashboardContent {
+  getContent(userData, user, t, setShowAskDonationForm) {
+    const displayName = userData?.displayName || user?.email?.split('@')[0] || 'User';
+    return {
+      title: `${t('dashboard.welcome')}, ${displayName}`,
+      subtitle: 'Track your emergency requests and get help when you need it',
+      quickActions: [
+        {
+          title: 'Submit New Request',
+          description: 'Create an emergency assistance request',
+          icon: '📝',
+          link: '/request',
+          color: 'primary',
+        },
+        {
+          title: 'Ask for Donation',
+          description: 'Request donations from volunteers',
+          icon: '💰',
+          onClick: () => setShowAskDonationForm(true),
+          color: 'secondary',
+        },
+        {
+          title: 'View Available Donations',
+          description: 'See donations from volunteers',
+          icon: '🎁',
+          link: '/donations',
+          color: 'info',
+        },
+        {
+          title: 'View My Requests',
+          description: 'Check the status of your requests',
+          icon: '📊',
+          link: '/my-requests',
+          color: 'secondary',
+        },
+        {
+          title: 'Find Shelters',
+          description: 'Locate nearby emergency shelters',
+          icon: '🏠',
+          link: '/shelters',
+          color: 'info',
+        },
+      ],
+      recentActivity: (recentRequests) => recentRequests.length > 0 ? recentRequests.map(request => ({
+        type: request.status === 'resolved' ? 'completed' : request.status === 'in-progress' ? 'update' : 'request',
+        message: `${request.title} - ${request.category} request ${request.status === 'resolved' ? 'completed' : request.status === 'in-progress' ? 'in progress' : 'submitted'}`,
+        time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+      })) : [
+        {
+          type: 'system',
+          message: 'No requests found. Click "Create Sample Data" to get started!',
+          time: 'Now'
+        }
+      ],
+    };
+  }
+}
+
+
+class VolunteerDashboardContent extends DashboardContent {
+  getContent(userData, user, t, setShowAskDonationForm) {
+    const displayName = userData?.displayName || user?.email?.split('@')[0] || 'User';
+    return {
+      title: `${t('dashboard.welcome')}, ${displayName}`,
+      subtitle: 'Help those in need by responding to emergency requests',
+      quickActions: [
+        {
+          title: 'View Nearby Requests',
+          description: 'See emergency requests in your area',
+          icon: '🤝',
+          link: '/volunteer',
+          color: 'primary',
+        },
+        {
+          title: 'Post Donation',
+          description: 'Post new donations for requesters',
+          icon: '💰',
+          link: '/donations',
+          color: 'secondary',
+        },
+        {
+          title: 'My Active Requests',
+          description: 'Manage your accepted requests',
+          icon: '📋',
+          link: '/volunteer',
+          color: 'secondary',
+        },
+        {
+          title: 'Emergency Resources',
+          description: 'Access first aid and survival guides',
+          icon: '📚',
+          link: '/resources',
+          color: 'info',
+        },
+      ],
+      recentActivity: (recentRequests) => recentRequests.map(request => {
+        const isAssigned = request.assignedVolunteerId === user?.uid;
+        const isPending = request.status === 'pending';
+        
+        if (isAssigned && request.status === 'resolved') {
+          return {
+            type: 'complete',
+            message: `Completed ${request.category} request`,
+            time: request.updatedAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+          };
+        } else if (isAssigned && request.status === 'in-progress') {
+          return {
+            type: 'accept',
+            message: `Accepted ${request.category} request`,
+            time: request.updatedAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+          };
+        } else if (isPending) {
+          return {
+            type: 'request',
+            message: `New ${request.category} request available`,
+            time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+          };
+        } else {
+          return {
+            type: 'request',
+            message: `${request.category} request ${request.status}`,
+            time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+          };
+        }
+      }),
+    };
+  }
+}
+
+
+class AdminDashboardContent extends DashboardContent {
+  getContent(userData, user, t, setShowAskDonationForm) {
+    const displayName = userData?.displayName || user?.email?.split('@')[0] || 'User';
+    return {
+      title: `${t('dashboard.welcome')}, ${displayName}`,
+      subtitle: 'Manage the emergency aid system and oversee operations',
+      quickActions: [
+        {
+          title: 'User Management',
+          description: 'Manage users and their roles',
+          icon: '👥',
+          link: '/admin',
+          color: 'primary',
+        },
+        {
+          title: 'System Overview',
+          description: 'View system statistics and analytics',
+          icon: '📊',
+          link: '/admin',
+          color: 'secondary',
+        },
+        {
+          title: 'Emergency Resources',
+          description: 'Manage emergency resources and guides',
+          icon: '📚',
+          link: '/resources',
+          color: 'info',
+        },
+      ],
+      recentActivity: (recentRequests) => recentRequests.map(request => ({
+        type: 'request',
+        message: `New ${request.category} request from ${request.contact?.name || 'Anonymous'}`,
+        time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
+      })),
+    };
+  }
+}
+
+
+// Factory for creating dashboard content
+class DashboardContentFactory {
+  static createDashboardContent(role) {
+    switch (role) {
+      case 'requester':
+        return new RequesterDashboardContent();
+      case 'volunteer':
+        return new VolunteerDashboardContent();
+      case 'admin':
+        return new AdminDashboardContent();
+      default:
+        return new RequesterDashboardContent();
+    }
+  }
+}
+
+
 const DashboardPage = () => {
   const { t } = useTranslation();
   const { user, userData, role, updateUser } = useAuth();
@@ -40,20 +400,15 @@ const DashboardPage = () => {
     description: '',
     quantity: '',
   });
-  // Define categories for the donation form
   const categories = ['food', 'clothing', 'medical', 'shelter'];
 
-  // Load Jack's data if needed
+
   const loadJacksData = async () => {
     try {
-      console.log('Loading Jack\'s data immediately...');
       setLoading(true);
-      
       if (!userData?.phone) {
-        console.log('Setting phone number for Jack...');
         await updateUser({ phone: '1234567890' });
       }
-      
       const result = await createSampleData(user.uid, userData);
       if (result.success) {
         const userRequests = await getRequestsByRequester(user.uid);
@@ -70,6 +425,7 @@ const DashboardPage = () => {
         
         setStats(newStats);
         setRecentRequests(userRequests.slice(0, 5));
+        setAskedDonations([]);
       }
     } catch (error) {
       console.error('Error loading Jack\'s data:', error);
@@ -78,484 +434,90 @@ const DashboardPage = () => {
     }
   };
 
+
   useEffect(() => {
     if (!user || !user.uid || !userData) return;
-    const loadDashboardData = async () => {
+    
+    const effectiveRole = role || userData?.role || 'requester';
+    if (!role && !userData?.role) {
+      updateUser({ role: 'requester' }).catch(error => {
+        console.error('Error setting role:', error);
+      });
+    }
+
+
+    const strategy = {
+      requester: new RequesterDataStrategy(),
+      volunteer: new VolunteerDataStrategy(),
+      admin: new AdminDataStrategy(),
+    }[effectiveRole] || new RequesterDataStrategy();
+
+
+    const loadData = async () => {
       try {
         setLoading(true);
-        console.log('=== DASHBOARD DATA LOADING START ===');
-        console.log('User ID:', user?.uid);
-        console.log('Role:', role || userData?.role);
-        const effectiveRole = role || userData?.role || 'requester';
-        if (effectiveRole === 'requester') {
-          const userRequests = await getRequestsByRequester(user.uid);
-          const pendingRequests = userRequests.filter(req => req.status === 'pending');
-          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-          const completedRequests = userRequests.filter(req => req.status === 'resolved');
-          const newStats = {
-            requests: userRequests.length,
-            active: activeRequests.length,
-            completed: completedRequests.length,
-            pending: pendingRequests.length,
-          };
-          setStats(newStats);
-          setRecentRequests(userRequests.slice(0, 5));
-          // Fix: Use donationService.getAskedDonationsByRequester
-          const userAskedDonations = await donationService.getAskedDonationsByRequester(user.uid);
-          setAskedDonations(userAskedDonations);
-        } else if (effectiveRole === 'volunteer') {
-          const assignedRequests = await getRequestsByVolunteer(user.uid);
-          const { getOpenRequests } = await import('../firebase/requests');
-          const allRequests = await getOpenRequests(100);
-          const nearbyPendingRequests = allRequests.filter(req => req.status === 'pending');
-          const userRequests = [...assignedRequests, ...nearbyPendingRequests];
-          const pendingRequests = userRequests.filter(req => req.status === 'pending');
-          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-          const completedRequests = userRequests.filter(req => req.status === 'resolved');
-          const newStats = {
-            requests: userRequests.length,
-            active: activeRequests.length,
-            completed: completedRequests.length,
-            pending: pendingRequests.length,
-          };
-          setStats(newStats);
-          setRecentRequests(userRequests.slice(0, 5));
-        } else if (effectiveRole === 'admin') {
-          const { getOpenRequests } = await import('../firebase/requests');
-          const userRequests = await getOpenRequests(100);
-          const pendingRequests = userRequests.filter(req => req.status === 'pending');
-          const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-          const completedRequests = userRequests.filter(req => req.status === 'resolved');
-          const newStats = {
-            requests: userRequests.length,
-            active: activeRequests.length,
-            completed: completedRequests.length,
-            pending: pendingRequests.length,
-          };
-          setStats(newStats);
-          setRecentRequests(userRequests.slice(0, 5));
-        }
+        await strategy.loadData(user, setStats, setRecentRequests, setAskedDonations);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
       } finally {
         setLoading(false);
       }
     };
-    loadDashboardData();
+
+
+    loadData();
   }, [user, userData, role]);
 
-  // Subscribe to real-time updates for recent requests
+
   useEffect(() => {
     if (!user || !user.uid) return;
-
-    console.log('Setting up real-time subscription for user:', user.uid);
     
-    let unsubscribe;
-    
-    // Subscribe to requests based on user role
     const effectiveRole = role || userData?.role || 'requester';
-    console.log('Real-time subscription for role:', effectiveRole);
-    
-    if (effectiveRole === 'volunteer') {
-      // For volunteers, subscribe to all requests (to see nearby and assigned)
-      unsubscribe = subscribeToRequests((requests) => {
-        console.log('Real-time update received for volunteer, total requests:', requests.length);
-        
-        // Get assigned requests
-        const assignedRequests = requests.filter(req => req.assignedVolunteerId === user.uid);
-        // Get pending requests (for nearby)
-        const pendingRequests = requests.filter(req => req.status === 'pending');
-        
-        // Combine and remove duplicates
-        const allVolunteerRequests = [...assignedRequests, ...pendingRequests];
-        const uniqueRequests = [];
-        const seenIds = new Set();
-        allVolunteerRequests.forEach(req => {
-          if (!seenIds.has(req.id)) {
-            seenIds.add(req.id);
-            uniqueRequests.push(req);
-          }
-        });
-        
-        console.log('Volunteer requests in real-time update:', uniqueRequests.length);
-        
-        setRecentRequests(uniqueRequests.slice(0, 5));
-        
-        // Update stats for volunteer
-        const volunteerPending = uniqueRequests.filter(req => req.status === 'pending');
-        const volunteerActive = uniqueRequests.filter(req => req.status === 'in-progress' && req.assignedVolunteerId === user.uid);
-        const volunteerCompleted = uniqueRequests.filter(req => req.status === 'resolved' && req.assignedVolunteerId === user.uid);
-        
-        const newStats = {
-          requests: uniqueRequests.length,
-          active: volunteerActive.length,
-          completed: volunteerCompleted.length,
-          pending: volunteerPending.length,
-        };
-        
-        console.log('Updating volunteer stats from real-time:', newStats);
-        setStats(newStats);
-      });
-    } else if (effectiveRole === 'requester') {
-      // For requesters, subscribe to their own requests
-      unsubscribe = subscribeToRequests((requests) => {
-        console.log('Real-time update received for requester, total requests:', requests.length);
-        const userRequests = requests.filter(req => req.requesterId === user.uid);
-        console.log('Requester requests in real-time update:', userRequests.length);
-        
-        setRecentRequests(userRequests.slice(0, 5));
-        
-        // Update stats
-        const pendingRequests = userRequests.filter(req => req.status === 'pending');
-        const activeRequests = userRequests.filter(req => req.status === 'in-progress');
-        const completedRequests = userRequests.filter(req => req.status === 'resolved');
-        
-        const newStats = {
-          requests: userRequests.length,
-          active: activeRequests.length,
-          completed: completedRequests.length,
-          pending: pendingRequests.length,
-        };
-        
-        console.log('Updating requester stats from real-time:', newStats);
-        setStats(newStats);
-      }, { requesterId: user.uid });
-    } else if (effectiveRole === 'admin') {
-      // For admins, subscribe to all requests
-      unsubscribe = subscribeToRequests((requests) => {
-        console.log('Real-time update received for admin, total requests:', requests.length);
-        
-        setRecentRequests(requests.slice(0, 5));
-        
-        // Update stats
-        const pendingRequests = requests.filter(req => req.status === 'pending');
-        const activeRequests = requests.filter(req => req.status === 'in-progress');
-        const completedRequests = requests.filter(req => req.status === 'resolved');
-        
-        const newStats = {
-          requests: requests.length,
-          active: activeRequests.length,
-          completed: completedRequests.length,
-          pending: pendingRequests.length,
-        };
-        
-        console.log('Updating admin stats from real-time:', newStats);
-        setStats(newStats);
-      });
-    }
+    const strategy = {
+      requester: new RequesterDataStrategy(),
+      volunteer: new VolunteerDataStrategy(),
+      admin: new AdminDataStrategy(),
+    }[effectiveRole] || new RequesterDataStrategy();
 
+
+    const unsubscribe = strategy.subscribeToRealTimeUpdates(user, setStats, setRecentRequests, setAskedDonations);
+    
     return () => {
       if (unsubscribe) {
-        console.log('Cleaning up real-time subscription');
         unsubscribe();
       }
     };
   }, [user, userData, role]);
 
-  // Subscribe to asked donations for requester
-  useEffect(() => {
-    if (!user || !user.uid) return;
-    if ((role || userData?.role) !== 'requester') return;
 
-    // Fix: Use donationService.subscribeToAskedDonations
-    const unsubscribe = donationService.subscribeToAskedDonations((askedDonationsData) => {
-      const userAskedDonations = askedDonationsData.filter(ask => ask.requesterId === user.uid);
-      setAskedDonations(userAskedDonations);
-    }, { requesterId: user.uid });
+  const dashboardContent = DashboardContentFactory.createDashboardContent(
+    role || userData?.role || 'requester'
+  );
+  const content = dashboardContent.getContent(userData, user, t, setShowAskDonationForm);
 
-    return () => unsubscribe();
-  }, [user, role, userData]);
-
-  const getRoleBasedContent = () => {
-    const displayName = userData?.displayName || user?.email?.split('@')[0] || 'User';
-    
-    // If role is not set, show requester content as fallback
-    const effectiveRole = role || userData?.role || 'requester';
-    
-    // Force set role if not set (without reload)
-    if (!role && !userData?.role && user) {
-      console.log('No role found, forcing requester role');
-      updateUser({ role: 'requester' }).catch(error => {
-        console.error('Error setting role:', error);
-      });
-    }
-    
-    switch (effectiveRole) {
-      case 'requester':
-        return {
-          title: `${t('dashboard.welcome')}, ${displayName}`,
-          subtitle: 'Track your emergency requests and get help when you need it',
-          quickActions: [
-            {
-              title: 'Submit New Request',
-              description: 'Create an emergency assistance request',
-              icon: '📝',
-              link: '/request',
-              color: 'primary',
-            },
-            {
-              title: 'Ask for Donation',
-              description: 'Request donations from volunteers',
-              icon: '💰',
-              onClick: () => setShowAskDonationForm(true),
-              color: 'secondary',
-            },
-            {
-              title: 'View Available Donations',
-              description: 'See donations from volunteers',
-              icon: '🎁',
-              link: '/donations',
-              color: 'info',
-            },
-            {
-              title: 'View My Requests',
-              description: 'Check the status of your requests',
-              icon: '📊',
-              link: '/my-requests',
-              color: 'secondary',
-            },
-            {
-              title: 'Find Shelters',
-              description: 'Locate nearby emergency shelters',
-              icon: '🏠',
-              link: '/shelters',
-              color: 'info',
-            },
-          ],
-          recentActivity: recentRequests.length > 0 ? recentRequests.map(request => ({
-            type: request.status === 'resolved' ? 'completed' : request.status === 'in-progress' ? 'update' : 'request',
-            message: `${request.title} - ${request.category} request ${request.status === 'resolved' ? 'completed' : request.status === 'in-progress' ? 'in progress' : 'submitted'}`,
-            time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-          })) : [
-            {
-              type: 'system',
-              message: 'No requests found. Click "Create Sample Data" to get started!',
-              time: 'Now'
-            }
-          ],
-        };
-
-      case 'volunteer':
-        return {
-          title: `${t('dashboard.welcome')}, ${displayName}`,
-          subtitle: 'Help those in need by responding to emergency requests',
-          quickActions: [
-            {
-              title: 'View Nearby Requests',
-              description: 'See emergency requests in your area',
-              icon: '🤝',
-              link: '/volunteer',
-              color: 'primary',
-            },
-            {
-              title: 'Post Donation',
-              description: 'Post new donations for requesters',
-              icon: '💰',
-              link: '/donations',
-              color: 'secondary',
-            },
-            {
-              title: 'My Active Requests',
-              description: 'Manage your accepted requests',
-              icon: '📋',
-              link: '/volunteer',
-              color: 'secondary',
-            },
-            {
-              title: 'Emergency Resources',
-              description: 'Access first aid and survival guides',
-              icon: '📚',
-              link: '/resources',
-              color: 'info',
-            },
-          ],
-          recentActivity: recentRequests.map(request => {
-            const isAssigned = request.assignedVolunteerId === user?.uid;
-            const isPending = request.status === 'pending';
-            
-            if (isAssigned && request.status === 'resolved') {
-              return {
-                type: 'complete',
-                message: `Completed ${request.category} request`,
-                time: request.updatedAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-              };
-            } else if (isAssigned && request.status === 'in-progress') {
-              return {
-                type: 'accept',
-                message: `Accepted ${request.category} request`,
-                time: request.updatedAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-              };
-            } else if (isPending) {
-              return {
-                type: 'request',
-                message: `New ${request.category} request available`,
-                time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-              };
-            } else {
-              return {
-                type: 'request',
-                message: `${request.category} request ${request.status}`,
-                time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-              };
-            }
-          }),
-        };
-
-      case 'admin':
-        return {
-          title: `${t('dashboard.welcome')}, ${displayName}`,
-          subtitle: 'Manage the emergency aid system and oversee operations',
-          quickActions: [
-            {
-              title: 'User Management',
-              description: 'Manage users and their roles',
-              icon: '👥',
-              link: '/admin',
-              color: 'primary',
-            },
-            {
-              title: 'System Overview',
-              description: 'View system statistics and analytics',
-              icon: '📊',
-              link: '/admin',
-              color: 'secondary',
-            },
-            {
-              title: 'Emergency Resources',
-              description: 'Manage emergency resources and guides',
-              icon: '📚',
-              link: '/resources',
-              color: 'info',
-            },
-          ],
-          recentActivity: recentRequests.map(request => ({
-            type: 'request',
-            message: `New ${request.category} request from ${request.contact?.name || 'Anonymous'}`,
-            time: request.createdAt?.toDate?.()?.toLocaleDateString() || 'Recently'
-          })),
-        };
-
-      default:
-        return {
-          title: `${t('dashboard.welcome')}, ${displayName}`,
-          subtitle: 'Welcome to the Emergency Aid System',
-          quickActions: [],
-          recentActivity: [],
-        };
-    }
-  };
-
-  const content = getRoleBasedContent();
 
   const handleLocationUpdate = async () => {
     try {
       await getCurrentLocation();
-    } catch (error) {
-      // Do not show notification; just open the manual location popup
-    }
+    } catch (error) {}
   };
+
 
   const handleManualRefresh = async () => {
     try {
       setRefreshing(true);
-      console.log('Manual refresh triggered');
-      
-      // Force reload dashboard data based on role
       const effectiveRole = role || userData?.role || 'requester';
-      console.log('Manual refresh for role:', effectiveRole);
+      const strategy = {
+        requester: new RequesterDataStrategy(),
+        volunteer: new VolunteerDataStrategy(),
+        admin: new AdminDataStrategy(),
+      }[effectiveRole] || new RequesterDataStrategy();
       
-      let userRequests = [];
+      await strategy.loadData(user, setStats, setRecentRequests, setAskedDonations);
       
-      if (effectiveRole === 'volunteer') {
-        // For volunteers, get assigned and pending requests
-        const { getOpenRequests, getRequestsByVolunteer } = await import('../firebase/requests');
-        const allRequests = await getOpenRequests(100);
-        const assignedRequests = await getRequestsByVolunteer(user.uid);
-        const pendingRequests = allRequests.filter(req => req.status === 'pending');
-        
-        // Combine and remove duplicates
-        userRequests = [...assignedRequests, ...pendingRequests];
-        const uniqueRequests = [];
-        const seenIds = new Set();
-        userRequests.forEach(req => {
-          if (!seenIds.has(req.id)) {
-            seenIds.add(req.id);
-            uniqueRequests.push(req);
-          }
-        });
-        userRequests = uniqueRequests;
-        
-        console.log('Manual refresh - Volunteer requests loaded:', userRequests);
-      } else if (effectiveRole === 'requester') {
-        // For requesters, get their specific requests
-        userRequests = await getRequestsByRequester(user.uid);
-        console.log('Manual refresh - Requester requests loaded:', userRequests);
-        
-        // If no requests, create a test one
-        if (userRequests.length === 0) {
-          console.log('No requests found for requester, creating test request...');
-          const { createRequest } = await import('../firebase/requests');
-          const testRequest = {
-            title: 'Test Request for Requester',
-            description: 'This is a test request to verify requester dashboard functionality',
-            category: 'medical',
-            urgency: 'medium',
-            status: 'pending',
-            contact: {
-              name: userData?.displayName || 'Test Requester',
-              phone: userData?.phone || '1234567890',
-              email: userData?.email || 'test@example.com'
-            },
-            location: {
-              lat: 23.8103,
-              lng: 90.4125
-            },
-            requesterId: user.uid,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          };
-          
-          await createRequest(testRequest);
-          userRequests = await getRequestsByRequester(user.uid);
-          console.log('Manual refresh - Requester requests after creating test:', userRequests);
-        }
-      } else if (effectiveRole === 'admin') {
-        // For admins, get all requests
-        const { getOpenRequests } = await import('../firebase/requests');
-        const allRequestsForAdmin = await getOpenRequests(100);
-        userRequests = allRequestsForAdmin;
-        console.log('Manual refresh - Admin requests loaded:', userRequests);
-      }
-      
-      // Calculate stats based on role
-      let pendingRequests, activeRequests, completedRequests;
-      
-      if (effectiveRole === 'volunteer') {
-        pendingRequests = userRequests.filter(req => req.status === 'pending');
-        activeRequests = userRequests.filter(req => req.status === 'in-progress' && req.assignedVolunteerId === user.uid);
-        completedRequests = userRequests.filter(req => req.status === 'resolved' && req.assignedVolunteerId === user.uid);
-      } else {
-        pendingRequests = userRequests.filter(req => req.status === 'pending');
-        activeRequests = userRequests.filter(req => req.status === 'in-progress');
-        completedRequests = userRequests.filter(req => req.status === 'resolved');
-      }
-      
-      const newStats = {
-        requests: userRequests.length,
-        active: activeRequests.length,
-        completed: completedRequests.length,
-        pending: pendingRequests.length,
-      };
-      
-      console.log('Manual refresh - Setting stats:', newStats);
-      setStats(newStats);
-      setRecentRequests(userRequests.slice(0, 5));
-      
-      // Show success message
       setTimeout(() => {
-        alert(`Data refreshed successfully for ${effectiveRole}! Found ${userRequests.length} requests.`);
+        alert(`Data refreshed successfully for ${effectiveRole}! Found ${recentRequests.length} requests.`);
       }, 500);
-      
     } catch (error) {
       console.error('Error refreshing data:', error);
       alert('Refresh failed: ' + error.message);
@@ -564,31 +526,26 @@ const DashboardPage = () => {
     }
   };
 
+
   const handleSendPanicAlert = async (forceNoLocation = false) => {
     setPanicSending(true);
     setShowPanicConfirm(false);
     try {
-      // Ensure user has a phone number before creating panic alert
       let currentUserData = userData;
       if (!userData?.phone) {
-        console.log('No phone number found, setting default phone...');
         await updateUser({ phone: '1234567890' });
-        // Update local userData to reflect the change
         currentUserData = { ...userData, phone: '1234567890' };
       }
       
       let location = null;
-      // Use currentLocation from context if available
       if (currentLocation && currentLocation.lat && currentLocation.lng) {
         location = currentLocation;
       } else if (currentUserData?.location && currentUserData.location.lat && currentUserData.location.lng) {
         location = currentUserData.location;
       } else if (!forceNoLocation) {
         try {
-          console.log('Panic Alert: Getting current location...');
           location = await getCurrentLocation();
         } catch (locErr) {
-          console.error('Panic Alert: Location error:', locErr);
           setPanicSending(false);
           setShowPanicNoLocation(true);
           return;
@@ -596,7 +553,6 @@ const DashboardPage = () => {
       }
       
       const phoneNumber = currentUserData?.phone || '1234567890';
-      console.log('Creating panic alert with phone:', phoneNumber, 'UserData phone:', currentUserData?.phone);
       
       await createPanicAlert({
         userId: user.uid,
@@ -613,23 +569,16 @@ const DashboardPage = () => {
       });
       setPanicSent(true);
       setTimeout(() => setPanicSent(false), 4000);
-      if (typeof addNotification === 'function') {
-        addNotification('Panic alert sent!', 'success');
-      } else {
-        alert('Panic alert sent!');
-      }
+      addNotification('Panic alert sent!', 'success');
     } catch (error) {
       console.error('Panic Alert: Failed to send alert:', error);
       setTimeout(() => setPanicSent(false), 4000);
-      if (typeof addNotification === 'function') {
-        addNotification('Failed to send panic alert', 'error');
-      } else {
-        alert('Failed to send panic alert: ' + error.message);
-      }
+      addNotification('Failed to send panic alert', 'error');
     } finally {
       setPanicSending(false);
     }
   };
+
 
   const handleAskDonationSubmit = async (e) => {
     e.preventDefault();
@@ -638,19 +587,20 @@ const DashboardPage = () => {
       return;
     }
 
+
     try {
       const askedDonationData = {
         title: newAskedDonation.title,
         category: newAskedDonation.category,
         description: newAskedDonation.description,
-        quantity: parseFloat(newAskedDonation.quantity) || 1, // Ensure quantity is a number
+        quantity: parseFloat(newAskedDonation.quantity) || 1,
         requesterId: user.uid,
         requesterName: userData?.displayName || 'Anonymous',
         requesterPhone: userData?.phone || '',
         status: donationService.DONATION_STATUS.PENDING,
       };
 
-      // Fix: Use donationService.createAskedDonation
+
       const createdAsk = await donationService.createAskedDonation(askedDonationData);
       setAskedDonations((prev) => [createdAsk, ...prev]);
       setNewAskedDonation({
@@ -667,13 +617,13 @@ const DashboardPage = () => {
     }
   };
 
+
   const renderQuickActions = () => {
     const effectiveRole = role || userData?.role || 'requester';
-    // Show quick actions for all roles
     return (
       <div className="quick-actions-grid">
         {content.quickActions.map((action, index) => (
-          <Link key={index} to={action.link} className="quick-action-card" onClick={action.onClick}>
+          <Link key={index} to={action.link || '#'} className="quick-action-card" onClick={action.onClick}>
             <div className="action-icon">{action.icon}</div>
             <div className="action-content">
               <h3 className="action-title">{action.title}</h3>
@@ -681,7 +631,6 @@ const DashboardPage = () => {
             </div>
           </Link>
         ))}
-        {/* Panic Alert only for requester */}
         {effectiveRole === 'requester' && (
           <div className="quick-action-card primary" style={{ borderLeft: '4px solid #e53e3e' }}>
             <span className="action-icon" style={{ fontSize: 32 }}>🚨</span>
@@ -713,6 +662,7 @@ const DashboardPage = () => {
     );
   };
 
+
   if (loading) {
     return (
       <div style={{ 
@@ -741,9 +691,9 @@ const DashboardPage = () => {
     );
   }
 
+
   return (
     <div className="dashboard-container">
-      {/* Panic Confirmation Modal */}
       {showPanicConfirm && (
         <div style={{
           position: 'fixed',
@@ -794,7 +744,6 @@ const DashboardPage = () => {
           `}</style>
         </div>
       )}
-      {/* Panic No Location Modal */}
       {showPanicNoLocation && (
         <div style={{
           position: 'fixed',
@@ -837,7 +786,6 @@ const DashboardPage = () => {
           <h1 className="dashboard-title">{content.title}</h1>
           <p className="dashboard-subtitle">{content.subtitle}</p>
         </div>
-        
         <div className="location-section">
           <div className="location-info">
             <span className="location-icon">📍</span>
@@ -850,11 +798,10 @@ const DashboardPage = () => {
           </div>
           <button 
             onClick={handleLocationUpdate}
-            className="location-update-btn"
+            className="location-update-btn btn mt-2"
           >
             Update Location
           </button>
-          {/* Manual Location Modal */}
           {manualLocationPrompt && (
             <div style={{
               position: 'fixed',
@@ -962,7 +909,6 @@ const DashboardPage = () => {
           )}
         </div>
       </div>
-
       <div className="stats-grid">
         <div className="stat-card">
           <div className="stat-icon">📊</div>
@@ -971,7 +917,6 @@ const DashboardPage = () => {
             <p className="stat-label">Total Requests</p>
           </div>
         </div>
-        
         <div className="stat-card">
           <div className="stat-icon">🔄</div>
           <div className="stat-content">
@@ -979,7 +924,6 @@ const DashboardPage = () => {
             <p className="stat-label">Active</p>
           </div>
         </div>
-        
         <div className="stat-card">
           <div className="stat-icon">✅</div>
           <div className="stat-content">
@@ -987,7 +931,6 @@ const DashboardPage = () => {
             <p className="stat-label">Completed</p>
           </div>
         </div>
-        
         <div className="stat-card">
           <div className="stat-icon">⏳</div>
           <div className="stat-content">
@@ -996,18 +939,16 @@ const DashboardPage = () => {
           </div>
         </div>
       </div>
-
       <div className="dashboard-content">
         <div className="quick-actions-section">
           <h2 className="section-title">Quick Actions</h2>
           {renderQuickActions()}
         </div>
-
         <div className="recent-activity-section">
           <h2 className="section-title">Recent Activity</h2>
           <div className="activity-list">
-            {content.recentActivity.length > 0 ? (
-              content.recentActivity.map((activity, index) => (
+            {content.recentActivity(recentRequests).length > 0 ? (
+              content.recentActivity(recentRequests).map((activity, index) => (
                 <div key={index} className="activity-item">
                   <div className="activity-icon">
                     {activity.type === 'request' && '📝'}
@@ -1030,7 +971,6 @@ const DashboardPage = () => {
           </div>
         </div>
       </div>
-      {/* Ask Donation Form for Requester */}
       {showAskDonationForm && (role || userData?.role) === 'requester' && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px #e2e8f0' }}>
           <h2 style={{ color: '#2d3748', marginBottom: 16 }}>Ask for Donation</h2>
@@ -1092,7 +1032,6 @@ const DashboardPage = () => {
           </form>
         </div>
       )}
-      {/* Asked Donations List for Requester */}
       {(role || userData?.role) === 'requester' && (
         <div style={{ marginTop: 32 }}>
           <h2 style={{ color: '#2d3748', marginBottom: 16 }}>My Asked Donations</h2>
@@ -1123,4 +1062,8 @@ const DashboardPage = () => {
   );
 };
 
+
 export default DashboardPage;
+
+
+
