@@ -1,62 +1,99 @@
-import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import './HomePage.css';
 
+
+// ======================
+// Strategy Pattern Classes
+// ======================
+class AccessStrategy {
+  canAccess({ isAuthenticated, role }, feature) {
+    return true;
+  }
+}
+
+
+class PublicStrategy extends AccessStrategy {
+  canAccess({ isAuthenticated, role }, feature) {
+    return true;
+  }
+}
+
+
+class AuthRequiredStrategy extends AccessStrategy {
+  canAccess({ isAuthenticated }) {
+    return isAuthenticated;
+  }
+}
+
+
+class RoleBasedStrategy extends AccessStrategy {
+  canAccess({ isAuthenticated, role }, feature) {
+    return isAuthenticated && role === feature.requiredRole;
+  }
+}
+
+
+// ======================
+// HomePage Component
+// ======================
 const HomePage = () => {
   const { t } = useTranslation();
-  const { isAuthenticated, user, userData } = useAuth();
+  const { isAuthenticated, userData } = useAuth();
   const { currentLanguage } = useLanguage();
   const navigate = useNavigate();
 
+
+  // Features now use Strategy instead of requiresAuth/requiredRole checks
   const features = [
     {
       icon: '📝',
       title: t('home.features.request'),
       description: 'Submit emergency requests with location tracking and real-time updates',
       link: '/request',
-      requiresAuth: true,
-      requiredRole: 'requester'
+      requiredRole: 'requester',
+      accessStrategy: new RoleBasedStrategy()
     },
     {
       icon: '🤝',
       title: t('home.features.volunteer'),
       description: 'Help those in need by responding to nearby emergency requests',
       link: '/volunteer',
-      requiresAuth: true,
-      requiredRole: 'volunteer'
+      requiredRole: 'volunteer',
+      accessStrategy: new RoleBasedStrategy()
     },
     {
       icon: '📊',
       title: t('home.features.track'),
       description: 'Monitor the status of your requests from submission to resolution',
       link: '/dashboard',
-      requiresAuth: true
+      accessStrategy: new AuthRequiredStrategy()
     },
     {
       icon: '💬',
       title: t('home.features.chat'),
       description: 'Communicate directly with volunteers and requesters in real-time',
       link: '/chat',
-      requiresAuth: true
+      accessStrategy: new AuthRequiredStrategy()
     },
     {
       icon: '🗺️',
       title: t('home.features.map'),
       description: 'Find nearby shelters, volunteers, and emergency resources',
       link: '/shelters',
-      requiresAuth: true
+      accessStrategy: new AuthRequiredStrategy()
     },
     {
       icon: '📚',
       title: t('home.features.resources'),
       description: 'Access emergency guides, first aid information, and survival tips',
       link: '/resources',
-      requiresAuth: false
+      accessStrategy: new PublicStrategy()
     },
   ];
+
 
   const stats = [
     { number: '1000+', label: 'Requests Helped', link: '/requests-helped' },
@@ -64,6 +101,7 @@ const HomePage = () => {
     { number: '50+', label: 'Emergency Shelters', link: '/emergency-shelters' },
     { number: '24/7', label: 'Support Available', link: '/support' },
   ];
+
 
   return (
     <div className="home-page">
@@ -74,7 +112,7 @@ const HomePage = () => {
             <h1 className="hero-title">{t('home.title')}</h1>
             <p className="hero-subtitle">{t('home.subtitle')}</p>
             <p className="hero-description">{t('home.description')}</p>
-            
+           
             <div className="hero-actions">
               {!isAuthenticated ? (
                 <>
@@ -92,7 +130,7 @@ const HomePage = () => {
               )}
             </div>
           </div>
-          
+         
           <div className="hero-visual">
             <div className="hero-image">
               <div className="emergency-icon">🚨</div>
@@ -106,6 +144,7 @@ const HomePage = () => {
         </div>
       </section>
 
+
       {/* Features Section */}
       <section className="features-section">
         <div className="container">
@@ -113,41 +152,34 @@ const HomePage = () => {
             <h2>{t('home.features.title')}</h2>
             <p>Comprehensive emergency response platform designed for everyone</p>
           </div>
-          
+         
           <div className="features-grid">
             {features.map((feature, index) => {
-              // Check if user can access this feature
-              // More permissive access - allow access if authenticated, even without role
-              const canAccess = !feature.requiresAuth || 
-                (isAuthenticated && (!feature.requiredRole || userData?.role === feature.requiredRole || !userData?.role));
-              
+              const canAccess = feature.accessStrategy.canAccess(
+                { isAuthenticated, role: userData?.role },
+                feature
+              );
+
+
               const handleFeatureClick = () => {
-                console.log('Feature click:', feature.title);
-                console.log('Is authenticated:', isAuthenticated);
-                console.log('UserData role:', userData?.role);
-                console.log('Required role:', feature.requiredRole);
-                console.log('Can access:', canAccess);
-                
                 if (!canAccess) {
                   if (!isAuthenticated) {
-                    // Redirect to login if not authenticated
                     navigate('/login');
                   } else if (feature.requiredRole && userData?.role !== feature.requiredRole) {
-                    // Show message for role restriction
                     alert(`This feature is only available for ${feature.requiredRole}s.`);
                   }
                   return;
                 }
-                // Navigate to the feature page
                 navigate(feature.link);
               };
 
+
               return (
-                <div 
-                  key={index} 
+                <div
+                  key={index}
                   className={`feature-card ${canAccess ? 'clickable' : 'disabled'}`}
                   onClick={handleFeatureClick}
-                  style={{ 
+                  style={{
                     cursor: canAccess ? 'pointer' : 'not-allowed',
                     opacity: canAccess ? 1 : 0.6,
                     transition: 'all 0.3s ease'
@@ -157,13 +189,13 @@ const HomePage = () => {
                   <h3 className="feature-title">{feature.title}</h3>
                   <p className="feature-description">{feature.description}</p>
                   {!canAccess && (
-                    <div className="feature-lock" style={{ 
-                      fontSize: '12px', 
-                      color: '#666', 
+                    <div className="feature-lock" style={{
+                      fontSize: '12px',
+                      color: '#666',
                       marginTop: '8px',
                       fontStyle: 'italic'
                     }}>
-                      {!isAuthenticated ? 'Login required' : `Only for ${feature.requiredRole}s`}
+                      {!isAuthenticated ? 'Login required' : `Only for ${feature.requiredRole || 'authorized users'}`}
                     </div>
                   )}
                 </div>
@@ -173,13 +205,14 @@ const HomePage = () => {
         </div>
       </section>
 
+
       {/* Stats Section */}
       <section className="stats-section">
         <div className="container">
           <div className="stats-header">
-            <h2 style={{ 
-              color: '#fff', 
-              textAlign: 'center', 
+            <h2 style={{
+              color: '#fff',
+              textAlign: 'center',
               marginBottom: '16px',
               fontSize: '2.5rem',
               fontWeight: '700',
@@ -187,9 +220,9 @@ const HomePage = () => {
             }}>
               Our Impact
             </h2>
-            <p style={{ 
-              color: '#e2e8f0', 
-              textAlign: 'center', 
+            <p style={{
+              color: '#e2e8f0',
+              textAlign: 'center',
               fontSize: '1.1rem',
               marginBottom: '40px',
               maxWidth: '600px',
@@ -200,8 +233,8 @@ const HomePage = () => {
           </div>
           <div className="stats-grid">
             {stats.map((stat, index) => (
-              <div 
-                key={index} 
+              <div
+                key={index}
                 className="stat-item"
                 style={{
                   background: 'rgba(255, 255, 255, 0.1)',
@@ -227,12 +260,6 @@ const HomePage = () => {
                   card.style.background = 'rgba(255, 255, 255, 0.1)';
                   card.style.boxShadow = 'none';
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    navigate(stat.link);
-                  }
-                }}
                 tabIndex={0}
                 role="button"
                 aria-label={`Click to view ${stat.label}: ${stat.number}`}
@@ -244,8 +271,7 @@ const HomePage = () => {
                   background: 'linear-gradient(135deg, #667eea, #764ba2)',
                   backgroundClip: 'text',
                   WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  textShadow: 'none'
+                  WebkitTextFillColor: 'transparent'
                 }}>
                   {stat.number}
                 </div>
@@ -289,7 +315,7 @@ const HomePage = () => {
               justifyContent: 'center',
               flexWrap: 'wrap'
             }}>
-              <Link 
+              <Link
                 to="/signup"
                 style={{
                   background: 'linear-gradient(135deg, #667eea, #764ba2)',
@@ -301,21 +327,12 @@ const HomePage = () => {
                   cursor: 'pointer',
                   transition: 'all 0.3s ease',
                   fontSize: '0.9rem',
-                  textDecoration: 'none',
-                  display: 'inline-block'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
+                  textDecoration: 'none'
                 }}
               >
                 Join Our Mission
               </Link>
-              <Link 
+              <Link
                 to="/resources"
                 style={{
                   background: 'transparent',
@@ -327,16 +344,7 @@ const HomePage = () => {
                   cursor: 'pointer',
                   transition: 'all 0.3s ease',
                   fontSize: '0.9rem',
-                  textDecoration: 'none',
-                  display: 'inline-block'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.5)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                  textDecoration: 'none'
                 }}
               >
                 Learn More
@@ -346,13 +354,14 @@ const HomePage = () => {
         </div>
       </section>
 
+
       {/* CTA Section */}
       <section className="cta-section">
         <div className="container">
           <div className="cta-content">
             <h2>Ready to help or need assistance?</h2>
             <p>Join our community of volunteers and requesters today</p>
-            
+           
             <div className="cta-actions">
               <Link to="/signup" className="btn btn-primary btn-large">
                 Join Now
@@ -364,6 +373,7 @@ const HomePage = () => {
           </div>
         </div>
       </section>
+
 
       {/* Emergency Quick Access */}
       <section className="emergency-section">
@@ -384,9 +394,10 @@ const HomePage = () => {
         </div>
       </section>
 
+
       {/* Language Toggle */}
       <div className="language-toggle-fixed">
-        <button 
+        <button
           className="language-btn"
           onClick={() => window.location.reload()}
           title={`Current: ${currentLanguage === 'en' ? 'English' : 'বাংলা'}`}
@@ -398,4 +409,8 @@ const HomePage = () => {
   );
 };
 
-export default HomePage; 
+
+export default HomePage;
+
+
+
