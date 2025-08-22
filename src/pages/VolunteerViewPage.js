@@ -10,7 +10,8 @@ import {
   URGENCY_LEVELS 
 } from '../firebase/requests';
 import { sendMessage, subscribeToChat } from '../firebase/chat';
-import { subscribeToAskedDonations } from '../firebase/donations'; // Use available export
+import donationService from '../firebase/mergedDonationService';
+import RequestLocationMap from '../components/common/RequestLocationMap';
 import { subscribeToActivePanicAlerts } from '../firebase/alerts';
 import { db } from '../firebase/config';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -29,117 +30,10 @@ import {
   subscribeToShelterRequests,
   SHELTER_REQUEST_STATUS
 } from '../firebase/shelterRequests';
+import { getAllAskedDonations, subscribeToAskedDonations } from '../firebase/donations';
 
 // Donation categories aligned with DonationBoardPage.js
 const DONATION_CATEGORIES = ['Food & Water', 'Medical', 'Shelter', 'Transport', 'Other'];
-
-// Abstract base class for request handling using Template Method Pattern
-class RequestHandler {
-  handleRequest(requestId, action, user, addNotification) {
-    try {
-      this.validateRequest(requestId);
-      this.performAction(requestId, action, user);
-      this.notifySuccess(action, addNotification);
-      this.updateUI(requestId, action);
-    } catch (error) {
-      this.handleError(error, addNotification);
-    }
-  }
-
-  validateRequest(requestId) {
-    throw new Error('validateRequest must be implemented by subclass');
-  }
-
-  performAction(requestId, action, user) {
-    throw new Error('performAction must be implemented by subclass');
-  }
-
-  handleError(error, addNotification) {
-    console.error(`Error in request handling: ${error.message}`);
-    addNotification(`Failed to process request: ${error.message}`, 'error');
-  }
-
-  notifySuccess(action, addNotification) {
-    addNotification(`Request ${action} successfully!`, 'success');
-  }
-
-  updateUI(requestId, action) {}
-}
-
-// Concrete class for handling emergency requests
-class EmergencyRequestHandler extends RequestHandler {
-  constructor(setRequests, setSelected) {
-    super();
-    this.setRequests = setRequests;
-    this.setSelected = setSelected;
-  }
-
-  validateRequest(requestId) {
-    if (!requestId) {
-      throw new Error('Request ID is required');
-    }
-  }
-
-  async performAction(requestId, action, user) {
-    if (action === 'accept') {
-      await assignVolunteerToRequest(requestId, user.uid);
-      await updateRequestStatus(requestId, 'in-progress');
-    } else if (action === 'decline') {
-      await updateRequestStatus(requestId, 'cancelled');
-    } else if (action === 'complete') {
-      await updateRequestStatus(requestId, 'resolved');
-    } else {
-      throw new Error(`Unsupported action: ${action}`);
-    }
-  }
-
-  updateUI(requestId, action) {
-    if (action === 'decline') {
-      this.setSelected(null);
-    }
-    this.setRequests(prev => prev.map(req => 
-      req.id === requestId 
-        ? { ...req, status: action === 'accept' ? 'in-progress' : action === 'complete' ? 'resolved' : 'cancelled' }
-        : req
-    ));
-  }
-}
-
-// Concrete class for handling shelter requests
-class ShelterRequestHandler extends RequestHandler {
-  constructor(setShelterRequests, setSelected) {
-    super();
-    this.setShelterRequests = setShelterRequests;
-    this.setSelected = setSelected;
-  }
-
-  validateRequest(requestId) {
-    if (!requestId) {
-      throw new Error('Shelter request ID is required');
-    }
-  }
-
-  async performAction(requestId, action, user) {
-    if (action === 'approve') {
-      await approveShelterRequest(requestId, user.uid);
-    } else if (action === 'reject') {
-      await rejectShelterRequest(requestId, user.uid);
-    } else {
-      throw new Error(`Unsupported action: ${action}`);
-    }
-  }
-
-  updateUI(requestId, action) {
-    if (action === 'reject') {
-      this.setSelected(null);
-    }
-    this.setShelterRequests(prev => prev.map(req => 
-      req.id === requestId 
-        ? { ...req, status: action }
-        : req
-    ));
-  }
-}
 
 const VolunteerViewPage = () => {
   const { t } = useTranslation();
@@ -158,13 +52,11 @@ const VolunteerViewPage = () => {
   const [newMessage, setNewMessage] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   
-  // Donation ask functionality
-  const [askedDonations, setAskedDonations] = useState([]);
-  const [selectedAsk, setSelectedAsk] = useState(null);
+  // Donation functionality
   const [showDonationModal, setShowDonationModal] = useState(false);
   const [donationForm, setDonationForm] = useState({
     title: '',
-    category: DONATION_CATEGORIES[0],
+    category: DONATION_CATEGORIES[0], // Default to first category
     description: '',
     amount: '',
     type: 'monetary'
@@ -193,9 +85,10 @@ const VolunteerViewPage = () => {
     location: { lat: '', lng: '' },
   });
 
-  // Request handlers
-  const emergencyRequestHandler = new EmergencyRequestHandler(setRequests, setSelected);
-  const shelterRequestHandler = new ShelterRequestHandler(setShelterRequests, setSelected);
+  // Asked donations for volunteers
+  const [askedDonations, setAskedDonations] = useState([]);
+  const [selectedAsk, setSelectedAsk] = useState(null);
+  const [showAskDonationModal, setShowAskDonationModal] = useState(false);
 
   // Helper functions
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
@@ -285,33 +178,34 @@ const VolunteerViewPage = () => {
     return () => unsubscribe();
   }, [user]);
 
-  // Subscribe to real-time donation asks
+  // Subscribe to real-time asked donations for volunteers
   useEffect(() => {
     if (!user || !user.uid || userData?.role !== 'volunteer') return;
     
-    const unsubscribe = subscribeToAskedDonations((donationsData) => {
-      const donationsWithDistance = donationsData.map(donation => {
-        if (userLocation && donation.location) {
+    const unsubscribe = subscribeToAskedDonations((askedDonationsData) => {
+      const askedWithDistance = askedDonationsData.map(ask => {
+        if (userLocation && ask.location) {
           const distance = calculateDistance(
             userLocation.lat,
             userLocation.lng,
-            donation.location.lat,
-            donation.location.lng
+            ask.location.lat,
+            ask.location.lng
           );
-          return { ...donation, distance: distance.toFixed(1) };
+          return { ...ask, distance: distance.toFixed(1) };
         }
-        return { ...donation, distance: null };
+        return { ...ask, distance: null };
       });
-      setAskedDonations(donationsWithDistance);
+      setAskedDonations(askedWithDistance);
     });
 
     return () => unsubscribe();
   }, [user, userData, userLocation]);
 
-  // Subscribe to shelter requests
+  // Simple: Just show empty state, let user load data manually
   useEffect(() => {
     if (!user || !user.uid) return;
     
+    // Don't auto-load anything, let user choose what to load
     setShelterRequests([]);
   }, [user]);
 
@@ -333,13 +227,73 @@ const VolunteerViewPage = () => {
     return () => unsubscribe();
   }, [user]);
 
-  // Event handlers using Template Method Pattern
-  const handleEmergencyRequest = (requestId, action) => {
-    emergencyRequestHandler.handleRequest(requestId, action, user, addNotification);
+  // Event handlers
+  const handleAccept = async (requestId) => {
+    try {
+      // Update booking status in text file
+      const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
+      const updatedBookings = allBookings.map(booking => {
+        if (booking.id === requestId) {
+          return {
+            ...booking,
+            status: 'approved',
+            approvedBy: user.uid,
+            approvedAt: new Date().toISOString()
+          };
+        }
+        return booking;
+      });
+      
+      localStorage.setItem('textFileBookings', JSON.stringify(updatedBookings));
+      addNotification('Booking approved successfully!', 'success');
+      
+      // Refresh the list
+      setShelterRequests(updatedBookings);
+    } catch (error) {
+      console.error('Error approving booking:', error);
+      addNotification('Failed to approve booking', 'error');
+    }
   };
 
-  const handleShelterRequest = (requestId, action) => {
-    shelterRequestHandler.handleRequest(requestId, action, user, addNotification);
+  const handleDecline = async (requestId) => {
+    try {
+      // Update booking status in text file
+      const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
+      const updatedBookings = allBookings.map(booking => {
+        if (booking.id === requestId) {
+          return {
+            ...booking,
+            status: 'rejected',
+            rejectedBy: user.uid,
+            rejectedAt: new Date().toISOString()
+          };
+        }
+        return booking;
+      });
+      
+      localStorage.setItem('textFileBookings', JSON.stringify(updatedBookings));
+      addNotification('Booking rejected.', 'info');
+      
+      if (selected && selected.id === requestId) {
+        setSelected(null);
+      }
+      
+      // Refresh the list
+      setShelterRequests(updatedBookings);
+    } catch (error) {
+      console.error('Error rejecting booking:', error);
+      addNotification('Failed to reject booking', 'error');
+    }
+  };
+
+  const handleComplete = async (requestId) => {
+    try {
+      await updateRequestStatus(requestId, 'resolved');
+      addNotification('Request marked as completed!', 'success');
+    } catch (error) {
+      console.error('Error completing request:', error);
+      addNotification('Failed to complete request', 'error');
+    }
   };
 
   const handleSendMessage = async (e) => {
@@ -360,6 +314,51 @@ const VolunteerViewPage = () => {
       addNotification('Failed to send message', 'error');
     } finally {
       setChatLoading(false);
+    }
+  };
+
+  const handleDonationSubmit = async (e) => {
+    e.preventDefault();
+    if (!donationForm.title || !donationForm.description || !donationForm.category) {
+      addNotification('Please fill in all required fields', 'error');
+      return;
+    }
+    if (donationForm.type === 'monetary' && (!donationForm.amount || isNaN(parseFloat(donationForm.amount)))) {
+      addNotification('Please enter a valid amount for monetary donation', 'error');
+      return;
+    }
+
+    try {
+      const donationData = {
+        title: donationForm.title,
+        category: donationForm.category,
+        description: donationForm.description,
+        amount: donationForm.type === 'monetary' ? parseFloat(donationForm.amount) : null,
+        type: donationForm.type,
+        donorId: user.uid,
+        donorName: userData?.displayName || 'Anonymous Volunteer',
+        linkedRequestId: selected?.id || null,
+        status: 'pending',
+        timestamp: Date.now()
+      };
+
+      const createdDonation = await donationService.createDonation(donationData);
+      if (selectedAsk) {
+        await donationService.linkDonationToAsk(createdDonation.id, selectedAsk.id);
+      }
+      addNotification('Donation submitted successfully!', 'success');
+      setShowDonationModal(false);
+      setDonationForm({
+        title: '',
+        category: DONATION_CATEGORIES[0],
+        description: '',
+        amount: '',
+        type: 'monetary'
+      });
+      setSelectedAsk(null);
+    } catch (error) {
+      console.error('Error creating donation:', error);
+      addNotification('Failed to submit donation', 'error');
     }
   };
 
@@ -434,6 +433,28 @@ const VolunteerViewPage = () => {
     }
   };
 
+  // Shelter request functions
+  const handleApproveShelterRequest = async (requestId) => {
+    try {
+      await approveShelterRequest(requestId, user.uid);
+      addNotification('Shelter request approved successfully!', 'success');
+    } catch (error) {
+      console.error('Error approving shelter request:', error);
+      addNotification('Failed to approve shelter request', 'error');
+    }
+  };
+
+  const handleRejectShelterRequest = async (requestId) => {
+    try {
+      await rejectShelterRequest(requestId, user.uid);
+      addNotification('Shelter request rejected successfully!', 'success');
+    } catch (error) {
+      console.error('Error rejecting shelter request:', error);
+      addNotification('Failed to reject shelter request', 'error');
+    }
+  };
+
+  // Manual location functions
   const handleManualLocationSave = async () => {
     setIsGeocoding(true);
     let ok = false;
@@ -462,6 +483,7 @@ const VolunteerViewPage = () => {
     }
   };
 
+  // Panic alert functions
   const handlePanicAlertAction = async (alertId, action, alert) => {
     try {
       if (action === 'respond') {
@@ -517,7 +539,7 @@ const VolunteerViewPage = () => {
       padding: '20px'
     }}>
       <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-        <h1 style={{
+                <h1 style={{
           color: '#2d3748',
           textAlign: 'center',
           marginBottom: '1rem',
@@ -607,6 +629,7 @@ const VolunteerViewPage = () => {
                         Respond
                       </button>
                     )}
+                    
                     {alert.respondedBy && !alert.resolved && alert.phone && (
                       <>
                         <button
@@ -639,6 +662,7 @@ const VolunteerViewPage = () => {
                         </button>
                       </>
                     )}
+                    
                     {alert.respondedBy && !alert.resolved && (
                       <button
                         onClick={() => handlePanicAlertAction(alert.id, 'resolve', alert)}
@@ -665,345 +689,368 @@ const VolunteerViewPage = () => {
         {/* Tab Content */}
         {activeTab === 'requests' && (
           <>
-            {/* Live Map Section */}
-            <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 24, boxShadow: '0 4px 12px #e2e8f0' }}>
-              <h2 style={{ color: '#2d3748', marginBottom: 16, fontSize: '1.5rem' }}>
-                🗺️ Live Emergency Requests Map
-              </h2>
-              <div style={{ marginBottom: 16, color: '#718096' }}>
-                View all active emergency requests on the map. Click on markers to see details and respond to requests.
-              </div>
-              <RequestsMap 
-                onRequestSelect={(request) => {
-                  console.log('Selected request:', request);
-                }}
-              />
-            </div>
+        {/* Live Map Section */}
+        <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 24, boxShadow: '0 4px 12px #e2e8f0' }}>
+          <h2 style={{ color: '#2d3748', marginBottom: 16, fontSize: '1.5rem' }}>
+            🗺️ Live Emergency Requests Map
+          </h2>
+          <div style={{ marginBottom: 16, color: '#718096' }}>
+            View all active emergency requests on the map. Click on markers to see details and respond to requests.
+          </div>
+          <RequestsMap 
+            onRequestSelect={(request) => {
+              console.log('Selected request:', request);
+            }}
+          />
+        </div>
 
-            {/* Filter Controls */}
-            <div style={{ 
-              background: '#fff', 
-              borderRadius: 16, 
-              padding: 20, 
-              marginBottom: 20, 
-              boxShadow: '0 4px 12px #e2e8f0',
-              border: '1px solid #e2e8f0'
-            }}>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{ fontWeight: '600', color: '#4a5568' }}>Filter:</span>
-                {['all', 'pending', 'assigned', 'completed'].map(filterOption => (
-                  <button
-                    key={filterOption}
-                    onClick={() => setFilter(filterOption)}
+        {/* Filter Controls */}
+        <div style={{ 
+          background: '#fff', 
+          borderRadius: 16, 
+          padding: 20, 
+          marginBottom: 20, 
+          boxShadow: '0 4px 12px #e2e8f0',
+          border: '1px solid #e2e8f0'
+        }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontWeight: '600', color: '#4a5568' }}>Filter:</span>
+            {['all', 'pending', 'assigned', 'completed'].map(filterOption => (
+              <button
+                key={filterOption}
+                onClick={() => setFilter(filterOption)}
+                style={{ 
+                  background: filter === filterOption ? '#667eea' : '#fff', 
+                  color: filter === filterOption ? '#fff' : '#4a5568', 
+                  border: '1px solid #e2e8f0', 
+                  borderRadius: 8, 
+                  padding: '8px 16px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                {filterOption.charAt(0).toUpperCase() + filterOption.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+          {/* Requests List */}
+          <div style={{ 
+            background: '#fff', 
+            borderRadius: 16, 
+            padding: 24, 
+            boxShadow: '0 4px 12px #e2e8f0',
+            border: '1px solid #e2e8f0',
+            maxHeight: '70vh',
+            overflow: 'auto'
+          }}>
+            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.5rem', fontWeight: '600' }}>
+              Emergency Requests
+            </h2>
+            
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🔄</div>
+                <div>Loading requests...</div>
+              </div>
+            ) : filteredRequests.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: '#718096' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>📭</div>
+                <div>No requests found</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {filteredRequests.map(request => (
+                  <div
+                    key={request.id}
+                    onClick={() => setSelected(request)}
                     style={{ 
-                      background: filter === filterOption ? '#667eea' : '#fff', 
-                      color: filter === filterOption ? '#fff' : '#4a5568', 
-                      border: '1px solid #e2e8f0', 
-                      borderRadius: 8, 
-                      padding: '8px 16px',
+                      background: selected?.id === request.id ? '#f7fafc' : '#fff',
+                      border: selected?.id === request.id ? '2px solid #667eea' : '1px solid #e2e8f0',
+                      borderRadius: 12,
+                      padding: 16,
                       cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
                       transition: 'all 0.3s ease'
                     }}
                   >
-                    {filterOption.charAt(0).toUpperCase() + filterOption.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
-              {/* Requests List */}
-              <div style={{ 
-                background: '#fff', 
-                borderRadius: 16, 
-                padding: 24, 
-                boxShadow: '0 4px 12px #e2e8f0',
-                border: '1px solid #e2e8f0',
-                maxHeight: '70vh',
-                overflow: 'auto'
-              }}>
-                <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.5rem', fontWeight: '600' }}>
-                  Emergency Requests
-                </h2>
-                
-                {loading ? (
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🔄</div>
-                    <div>Loading requests...</div>
-                  </div>
-                ) : filteredRequests.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '2rem', color: '#718096' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>📭</div>
-                    <div>No requests found</div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {filteredRequests.map(request => (
-                      <div
-                        key={request.id}
-                        onClick={() => setSelected(request)}
-                        style={{ 
-                          background: selected?.id === request.id ? '#f7fafc' : '#fff',
-                          border: selected?.id === request.id ? '2px solid #667eea' : '1px solid #e2e8f0',
-                          borderRadius: 12,
-                          padding: 16,
-                          cursor: 'pointer',
-                          transition: 'all 0.3s ease'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: '1.2rem' }}>{getCategoryIcon(request.category)}</span>
-                            <span style={{ fontWeight: '600', color: '#2d3748' }}>
-                              {request.contact?.name || 'Anonymous'}
-                            </span>
-                            {request.panic && (
-                              <span style={{ color: '#fff', background: '#e53e3e', borderRadius: 8, padding: '2px 8px', fontWeight: 700, marginLeft: 8, fontSize: 12, verticalAlign: 'middle' }}>PANIC</span>
-                            )}
-                          </div>
-                          <span style={{
-                            padding: '4px 8px',
-                            borderRadius: 8,
-                            fontSize: 12,
-                            backgroundColor: getUrgencyColor(request.urgency),
-                            color: '#fff',
-                            fontWeight: '600',
-                            textTransform: 'uppercase'
-                          }}>
-                            {request.urgency}
-                          </span>
-                        </div>
-                        
-                        <p style={{ color: '#4a5568', marginBottom: 8, fontSize: '14px' }}>
-                          {request.description?.substring(0, 100)}...
-                        </p>
-                        
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ 
-                            padding: '4px 12px', 
-                            borderRadius: 12, 
-                            fontSize: 12,
-                            backgroundColor: getStatusColor(request.status),
-                            color: '#fff',
-                            fontWeight: '600',
-                            textTransform: 'uppercase'
-                          }}>
-                            {request.status}
-                          </span>
-                          {request.distance && (
-                            <span style={{ fontSize: '12px', color: '#718096' }}>
-                              📍 {request.distance} km away
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Action Buttons */}
-                        {request.status === 'pending' && (
-                          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEmergencyRequest(request.id, 'accept');
-                              }}
-                              style={{ 
-                                background: '#38a169', 
-                                color: '#fff', 
-                                border: 'none', 
-                                borderRadius: 6, 
-                                padding: '6px 12px', 
-                                fontSize: 12,
-                                cursor: 'pointer',
-                                fontWeight: '600'
-                              }}
-                            >
-                              Accept
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEmergencyRequest(request.id, 'decline');
-                              }}
-                              style={{ 
-                                background: '#e53e3e', 
-                                color: '#fff', 
-                                border: 'none', 
-                                borderRadius: 6, 
-                                padding: '6px 12px', 
-                                fontSize: 12,
-                                cursor: 'pointer',
-                                fontWeight: '600'
-                              }}
-                            >
-                              Decline
-                            </button>
-                          </div>
-                        )}
-
-                        {request.assignedVolunteerId === user?.uid && request.status === 'in-progress' && (
-                          <div style={{ marginTop: 12 }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEmergencyRequest(request.id, 'complete');
-                              }}
-                              style={{ 
-                                background: '#3182ce', 
-                                color: '#fff', 
-                                border: 'none', 
-                                borderRadius: 6, 
-                                padding: '6px 12px', 
-                                fontSize: 12,
-                                cursor: 'pointer',
-                                fontWeight: '600'
-                              }}
-                            >
-                              Mark Complete
-                            </button>
-                          </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: '1.2rem' }}>{getCategoryIcon(request.category)}</span>
+                        <span style={{ fontWeight: '600', color: '#2d3748' }}>
+                          {request.contact?.name || 'Anonymous'}
+                        </span>
+                        {request.panic && (
+                          <span style={{ color: '#fff', background: '#e53e3e', borderRadius: 8, padding: '2px 8px', fontWeight: 700, marginLeft: 8, fontSize: 12, verticalAlign: 'middle' }}>PANIC</span>
                         )}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Chat and Details Panel */}
-              <div style={{ 
-                background: '#fff', 
-                borderRadius: 16, 
-                padding: 24, 
-                boxShadow: '0 4px 12px #e2e8f0',
-                border: '1px solid #e2e8f0',
-                maxHeight: '70vh',
-                display: 'flex',
-                flexDirection: 'column'
-              }}>
-                {selected ? (
-                  <>
-                    {/* Request Details */}
-                    <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid #e2e8f0' }}>
-                      <h3 style={{ color: '#2d3748', marginBottom: 12, fontSize: '1.2rem', fontWeight: '600' }}>
-                        Request Details
-                      </h3>
-                      <div style={{ fontSize: '14px', color: '#4a5568' }}>
-                        <p><strong>Category:</strong> {getCategoryIcon(selected.category)} {selected.category}</p>
-                        <p><strong>Urgency:</strong> 
-                          <span style={{
-                            padding: '2px 6px',
-                            borderRadius: 4,
-                            fontSize: 12,
-                            backgroundColor: getUrgencyColor(selected.urgency),
-                            color: '#fff',
-                            marginLeft: 8
-                          }}>
-                            {selected.urgency}
-                          </span>
-                        </p>
-                        <p><strong>Description:</strong> {selected.description}</p>
-                        <p><strong>Contact:</strong> {selected.contact?.name} - {selected.contact?.phone}</p>
-                        {selected.location && (
-                          <p><strong>Location:</strong> 📍 {selected.location.lat.toFixed(4)}, {selected.location.lng.toFixed(4)}</p>
-                        )}
-                      </div>
+                      <span style={{
+                        padding: '4px 8px',
+                        borderRadius: 8,
+                        fontSize: 12,
+                        backgroundColor: getUrgencyColor(request.urgency),
+                        color: '#fff',
+                        fontWeight: '600',
+                        textTransform: 'uppercase'
+                      }}>
+                        {request.urgency}
+                      </span>
+                    </div>
+                    
+                    <p style={{ color: '#4a5568', marginBottom: 8, fontSize: '14px' }}>
+                      {request.description?.substring(0, 100)}...
+                    </p>
+                    
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ 
+                        padding: '4px 12px', 
+                        borderRadius: 12, 
+                        fontSize: 12,
+                        backgroundColor: getStatusColor(request.status),
+                        color: '#fff',
+                        fontWeight: '600',
+                        textTransform: 'uppercase'
+                      }}>
+                        {request.status}
+                      </span>
+                      {request.distance && (
+                        <span style={{ fontSize: '12px', color: '#718096' }}>
+                          📍 {request.distance} km away
+                        </span>
+                      )}
                     </div>
 
-                    {/* Chat Section */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                      <h4 style={{ color: '#2d3748', marginBottom: 12, fontSize: '1rem', fontWeight: '600' }}>
-                        Chat with Requester
-                      </h4>
-                      <div style={{ 
-                        flex: 1, 
-                        overflow: 'auto', 
-                        marginBottom: 12,
-                        padding: 12,
-                        background: '#f8fafc',
-                        borderRadius: 8,
-                        maxHeight: '200px'
-                      }}>
-                        {chatMessages.length === 0 ? (
-                          <div style={{ textAlign: 'center', color: '#718096', fontSize: '14px' }}>
-                            No messages yet. Start the conversation!
-                          </div>
-                        ) : (
-                          chatMessages.map((message, index) => (
-                            <div
-                              key={index}
-                              style={{
-                                marginBottom: 8,
-                                textAlign: message.senderRole === 'volunteer' ? 'right' : 'left'
-                              }}
-                            >
-                              <div style={{
-                                display: 'inline-block',
-                                background: message.senderRole === 'volunteer' ? '#667eea' : '#e2e8f0',
-                                color: message.senderRole === 'volunteer' ? '#fff' : '#2d3748',
-                                padding: '8px 12px',
-                                borderRadius: 12,
-                                maxWidth: '80%',
-                                fontSize: '14px'
-                              }}>
-                                <div style={{ fontWeight: '600', fontSize: '12px', marginBottom: 4 }}>
-                                  {message.senderName}
-                                </div>
-                                {message.text}
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-
-                      <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) => setNewMessage(e.target.value)}
-                          placeholder="Type your message..."
-                          style={{
-                            flex: 1,
-                            padding: '8px 12px',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: 8,
-                            fontSize: '14px'
-                          }}
-                          disabled={chatLoading}
-                        />
+                    {/* Action Buttons */}
+                    {request.status === 'pending' && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                         <button
-                          type="submit"
-                          disabled={!newMessage.trim() || chatLoading}
-                          style={{
-                            background: '#667eea',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: 8,
-                            padding: '8px 16px',
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAccept(request.id);
+                          }}
+                          style={{ 
+                            background: '#38a169', 
+                            color: '#fff', 
+                            border: 'none', 
+                            borderRadius: 6, 
+                            padding: '6px 12px', 
+                            fontSize: 12,
                             cursor: 'pointer',
-                            fontSize: '14px',
-                            fontWeight: '600',
-                            opacity: (!newMessage.trim() || chatLoading) ? 0.5 : 1
+                            fontWeight: '600'
                           }}
                         >
-                          {chatLoading ? 'Sending...' : 'Send'}
+                          Accept
                         </button>
-                      </form>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ textAlign: 'center', color: '#718096', padding: '2rem' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>💬</div>
-                    <div>Select a request to view details and chat</div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDecline(request.id);
+                          }}
+                          style={{ 
+                            background: '#e53e3e', 
+                            color: '#fff', 
+                            border: 'none', 
+                            borderRadius: 6, 
+                            padding: '6px 12px', 
+                            fontSize: 12,
+                            cursor: 'pointer',
+                            fontWeight: '600'
+                          }}
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    )}
+
+                    {request.assignedVolunteerId === user?.uid && request.status === 'in-progress' && (
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleComplete(request.id);
+                          }}
+                          style={{ 
+                            background: '#3182ce', 
+                            color: '#fff', 
+                            border: 'none', 
+                            borderRadius: 6, 
+                            padding: '6px 12px', 
+                            fontSize: 12,
+                            cursor: 'pointer',
+                            fontWeight: '600'
+                          }}
+                        >
+                          Mark Complete
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-            </div>
+            )}
+          </div>
+
+          {/* Chat and Details Panel */}
+          <div style={{ 
+            background: '#fff', 
+            borderRadius: 16, 
+            padding: 24, 
+            boxShadow: '0 4px 12px #e2e8f0',
+            border: '1px solid #e2e8f0',
+            maxHeight: '70vh',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            {selected ? (
+              <>
+                {/* Request Details */}
+                <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid #e2e8f0' }}>
+                  <h3 style={{ color: '#2d3748', marginBottom: 12, fontSize: '1.2rem', fontWeight: '600' }}>
+                    Request Details
+                  </h3>
+                  <div style={{ fontSize: '14px', color: '#4a5568' }}>
+                    <p><strong>Category:</strong> {getCategoryIcon(selected.category)} {selected.category}</p>
+                    <p><strong>Urgency:</strong> 
+                      <span style={{
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        backgroundColor: getUrgencyColor(selected.urgency),
+                        color: '#fff',
+                        marginLeft: 8
+                      }}>
+                        {selected.urgency}
+                      </span>
+                    </p>
+                    <p><strong>Description:</strong> {selected.description}</p>
+                    <p><strong>Contact:</strong> {selected.contact?.name} - {selected.contact?.phone}</p>
+                    {selected.location && (
+                      <p><strong>Location:</strong> 📍 {selected.location.lat.toFixed(4)}, {selected.location.lng.toFixed(4)}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Chat Section */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <h4 style={{ color: '#2d3748', marginBottom: 12, fontSize: '1rem', fontWeight: '600' }}>
+                    Chat with Requester
+                  </h4>
+                  
+                  {/* Messages */}
+                  <div style={{ 
+                    flex: 1, 
+                    overflow: 'auto', 
+                    marginBottom: 12,
+                    padding: 12,
+                    background: '#f8fafc',
+                    borderRadius: 8,
+                    maxHeight: '200px'
+                  }}>
+                    {chatMessages.length === 0 ? (
+                      <div style={{ textAlign: 'center', color: '#718096', fontSize: '14px' }}>
+                        No messages yet. Start the conversation!
+                      </div>
+                    ) : (
+                      chatMessages.map((message, index) => (
+                        <div
+                          key={index}
+                          style={{
+                            marginBottom: 8,
+                            textAlign: message.senderRole === 'volunteer' ? 'right' : 'left'
+                          }}
+                        >
+                          <div style={{
+                            display: 'inline-block',
+                            background: message.senderRole === 'volunteer' ? '#667eea' : '#e2e8f0',
+                            color: message.senderRole === 'volunteer' ? '#fff' : '#2d3748',
+                            padding: '8px 12px',
+                            borderRadius: 12,
+                            maxWidth: '80%',
+                            fontSize: '14px'
+                          }}>
+                            <div style={{ fontWeight: '600', fontSize: '12px', marginBottom: 4 }}>
+                              {message.senderName}
+                            </div>
+                            {message.text}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Message Input */}
+                  <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="text"
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      placeholder="Type your message..."
+                      style={{
+                        flex: 1,
+                        padding: '8px 12px',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 8,
+                        fontSize: '14px'
+                      }}
+                      disabled={chatLoading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newMessage.trim() || chatLoading}
+                      style={{
+                        background: '#667eea',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        padding: '8px 16px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        opacity: (!newMessage.trim() || chatLoading) ? 0.5 : 1
+                      }}
+                    >
+                      {chatLoading ? 'Sending...' : 'Send'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Donation Button */}
+                <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+                  <button
+                    onClick={() => setShowDonationModal(true)}
+                    style={{
+                      background: '#38a169',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      padding: '10px 20px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontWeight: '600',
+                      width: '100%'
+                    }}
+                  >
+                    💝 Make a Donation for this Request
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ textAlign: 'center', color: '#718096', padding: '2rem' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>💬</div>
+                <div>Select a request to view details and chat</div>
+              </div>
+            )}
+          </div>
+        </div>
           </>
         )}
 
         {activeTab === 'donation-asks' && (
           <div>
-            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Donation Asks</h2>
+            <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Donation Asks from Requesters</h2>
             <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -1011,31 +1058,54 @@ const VolunteerViewPage = () => {
                     <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Requester</th>
                     <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Title</th>
                     <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Category</th>
-                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Type</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Quantity</th>
                     <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Status</th>
+                    <th style={{ padding: 16, textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568', fontWeight: '600' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {askedDonations.map(ask => (
                     <tr key={ask.id}>
                       <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
-                        <div style={{ fontWeight: 600 }}>{ask.requesterName || 'Anonymous'}</div>
+                        <div style={{ fontWeight: 600 }}>{ask.requesterName}</div>
+                        <div style={{ fontSize: 12, color: '#718096' }}>{ask.requesterPhone}</div>
                       </td>
                       <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.title}</td>
                       <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.category}</td>
-                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.type}</td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>{ask.quantity}</td>
                       <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
                         <span style={{ 
                           padding: '4px 12px', 
                           borderRadius: 12, 
                           fontSize: 12,
-                          backgroundColor: ask.status === 'pending' ? '#d69e2e' : ask.status === 'accepted' ? '#38a169' : '#e53e3e',
+                          backgroundColor: ask.status === 'pending' ? '#d69e2e' : ask.status === 'matched' ? '#38a169' : '#e53e3e',
                           color: '#fff',
                           fontWeight: '600',
                           textTransform: 'uppercase'
                         }}>
                           {ask.status}
                         </span>
+                      </td>
+                      <td style={{ padding: 16, borderBottom: '1px solid #f1f5f9' }}>
+                        {ask.status === 'pending' && (
+                          <button
+                            onClick={() => {
+                              setSelectedAsk(ask);
+                              setShowDonationModal(true);
+                            }}
+                            style={{ 
+                              background: '#38a169', 
+                              color: '#fff', 
+                              border: 'none', 
+                              borderRadius: 6, 
+                              padding: '6px 12px', 
+                              fontSize: 12,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Donate
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1140,10 +1210,13 @@ const VolunteerViewPage = () => {
         {activeTab === 'shelter-requests' && (
           <div>
             <h2 style={{ color: '#2d3748', marginBottom: 20, fontSize: '2rem', fontWeight: '600' }}>Shelter Requests</h2>
+            
+            {/* Simple: Just One Button */}
             <div style={{ marginBottom: 20 }}>
               <button
                 onClick={() => {
                   try {
+                    // Simple: just get all data from localStorage
                     const allBookings = JSON.parse(localStorage.getItem('textFileBookings') || '[]');
                     console.log('Loading all bookings:', allBookings);
                     
@@ -1154,6 +1227,7 @@ const VolunteerViewPage = () => {
                     
                     setShelterRequests(allBookings);
                     addNotification(`Loaded ${allBookings.length} booking(s)!`, 'success');
+                    
                   } catch (error) {
                     console.error('Error loading bookings:', error);
                     addNotification('Failed to load bookings.', 'error');
@@ -1172,6 +1246,7 @@ const VolunteerViewPage = () => {
                 📁 Load Bookings from File
               </button>
             </div>
+            
             <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 12px #e2e8f0', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -1223,7 +1298,7 @@ const VolunteerViewPage = () => {
                         {request.status === 'pending' && (
                           <div style={{ display: 'flex', gap: 8 }}>
                             <button
-                              onClick={() => handleShelterRequest(request.id, 'approve')}
+                              onClick={() => handleAccept(request.id)}
                               style={{ 
                                 background: '#38a169', 
                                 color: '#fff', 
@@ -1237,7 +1312,7 @@ const VolunteerViewPage = () => {
                               Approve
                             </button>
                             <button
-                              onClick={() => handleShelterRequest(request.id, 'reject')}
+                              onClick={() => handleDecline(request.id)}
                               style={{ 
                                 background: '#e53e3e', 
                                 color: '#fff', 
@@ -1285,7 +1360,7 @@ const VolunteerViewPage = () => {
             }}>
               <h2 style={{ marginBottom: 16 }}>Enter Your Location</h2>
               <p style={{ marginBottom: 16 }}>Please enter your address or coordinates</p>
-              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 16 }}>
                 <input
                   type="text"
                   value={manualAddress}
@@ -1316,11 +1391,11 @@ const VolunteerViewPage = () => {
                 <button
                   onClick={handleManualLocationSave}
                   disabled={isGeocoding}
-                  style={{
+                    style={{
                     background: '#3182ce',
                     color: '#fff',
                     border: 'none',
-                    borderRadius: 8,
+                      borderRadius: 8,
                     padding: '12px 24px',
                     cursor: 'pointer',
                     fontSize: '14px',
@@ -1331,20 +1406,20 @@ const VolunteerViewPage = () => {
                 </button>
                 <button
                   onClick={() => setShowManualLocationPrompt(false)}
-                  style={{
+                    style={{
                     background: '#e2e8f0',
                     color: '#4a5568',
                     border: 'none',
-                    borderRadius: 8,
+                      borderRadius: 8,
                     padding: '12px 24px',
                     cursor: 'pointer',
                     fontSize: '14px',
                     fontWeight: '600'
-                  }}
+                    }}
                 >
                   Cancel
                 </button>
-              </div>
+                </div>
             </div>
           </div>
         )}
@@ -1354,7 +1429,7 @@ const VolunteerViewPage = () => {
           <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
             <form onSubmit={handleShelterSubmit} style={{ background: '#fff', borderRadius: 16, padding: 32, minWidth: 320, maxWidth: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
               <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.3rem', fontWeight: '600' }}>{editingShelter ? 'Edit Shelter' : 'Add Shelter'}</h3>
-              <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 16 }}>
                 <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Name</label>
                 <input name="name" value={shelterForm.name} onChange={handleShelterFormChange} required style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #e2e8f0' }} />
               </div>
@@ -1396,11 +1471,99 @@ const VolunteerViewPage = () => {
             </form>
           </div>
         )}
+
+        {/* Donation Modal */}
+        {showDonationModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+            <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 500, width: '90%', maxHeight: '80vh', overflow: 'auto' }}>
+              <h3 style={{ color: '#2d3748', marginBottom: 20, fontSize: '1.5rem', fontWeight: '600' }}>Make a Donation</h3>
+              <form onSubmit={handleDonationSubmit}>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Donation Type</label>
+                  <select
+                    value={donationForm.type}
+                    onChange={(e) => setDonationForm(prev => ({ ...prev, type: e.target.value }))}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                  >
+                    <option value="monetary">Monetary</option>
+                    <option value="goods">Goods/Items</option>
+                    <option value="services">Services</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Category</label>
+                  <select
+                    value={donationForm.category}
+                    onChange={(e) => setDonationForm(prev => ({ ...prev, category: e.target.value }))}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                    required
+                  >
+                    <option value="">Select category</option>
+                    {DONATION_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Title</label>
+                    <input
+                    type="text"
+                    value={donationForm.title}
+                    onChange={(e) => setDonationForm(prev => ({ ...prev, title: e.target.value }))}
+                    placeholder="Brief description"
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                    />
+                  </div>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Description</label>
+                  <textarea
+                    value={donationForm.description}
+                    onChange={(e) => setDonationForm(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="Detailed description..."
+                    rows={4}
+                    style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                  />
+                </div>
+                {donationForm.type === 'monetary' && (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: 'block', marginBottom: 8, fontWeight: '600', color: '#4a5568' }}>Amount</label>
+                    <input
+                      type="number"
+                      value={donationForm.amount}
+                      onChange={(e) => setDonationForm(prev => ({ ...prev, amount: e.target.value }))}
+                      placeholder="Enter amount"
+                      style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '14px' }}
+                      min="0"
+                      step="any"
+                    />
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <button
+                    type="submit"
+                    style={{ flex: 1, background: '#38a169', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 24px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
+                  >
+                    Submit Donation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDonationModal(false);
+                      setSelectedAsk(null);
+                    }}
+                    style={{ flex: 1, background: '#e2e8f0', color: '#4a5568', border: 'none', borderRadius: 8, padding: '12px 24px', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
 export default VolunteerViewPage;
-
 
