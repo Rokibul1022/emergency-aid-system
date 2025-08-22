@@ -61,7 +61,7 @@ export const createDonation = async (donationData) => {
       type,
       donorId,
       donorName,
-      linkedRequestId: linkedRequestId === undefined ? null : linkedRequestId, // Default to null if undefined
+      linkedRequestId: linkedRequestId === undefined ? null : linkedRequestId,
       linkedAskId: null,
       status,
       createdAt: serverTimestamp(),
@@ -84,13 +84,40 @@ export const createDonation = async (donationData) => {
 // Create an asked donation (requester)
 export const createAskedDonation = async (askedDonationData) => {
   try {
+    const {
+      title,
+      category,
+      description,
+      amount,
+      type,
+      requesterId,
+      requesterName,
+      location,
+      urgency,
+      status = DONATION_STATUS.PENDING
+    } = askedDonationData;
+
+    // Validate required fields
+    if (!title || !category || !requesterId) {
+      throw new Error('Title, category, and requesterId are required');
+    }
+
     const askedDonation = {
-      ...askedDonationData,
-      status: DONATION_STATUS.PENDING,
+      title,
+      category,
+      description: description || null,
+      amount: type === DONATION_TYPES.MONETARY ? parseFloat(amount) : null,
+      type: type || DONATION_TYPES.GOODS, // Default to 'goods' if undefined
+      requesterId,
+      requesterName: requesterName || 'Anonymous Requester',
+      location: location || null,
+      urgency: urgency || 'medium', // Default urgency
+      status,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       matchedDonationId: null
     };
+
     const docRef = await addDoc(collection(db, ASKED_DONATIONS_COLLECTION), askedDonation);
     return { id: docRef.id, ...askedDonation };
   } catch (error) {
