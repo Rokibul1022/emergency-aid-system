@@ -1,5 +1,4 @@
-// SMS Service using TextLocal (free alternative to Twilio)
-// Sign up at: https://www.textlocal.in/
+
 
 const TEXTLOCAL_API_KEY = process.env.REACT_APP_TEXTLOCAL_API_KEY || 'YOUR_TEXTLOCAL_API_KEY';
 const TEXTLOCAL_SENDER = process.env.REACT_APP_TEXTLOCAL_SENDER || 'TXTLCL';

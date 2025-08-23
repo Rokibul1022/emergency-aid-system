@@ -400,27 +400,33 @@ const bnTranslations = {
   },
 };
 
-i18n
-  .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    resources: {
-      en: {
-        translation: enTranslations,
-      },
-      bn: {
-        translation: bnTranslations,
-      },
-    },
-    fallbackLng: 'en',
-    debug: process.env.NODE_ENV === 'development',
-    interpolation: {
-      escapeValue: false,
-    },
-    detection: {
-      order: ['localStorage', 'navigator'],
-      caches: ['localStorage'],
-    },
-  });
+// Singleton class for i18n
+class I18nSingleton {
+  constructor() {
+    if (!I18nSingleton.instance) {
+      i18n
+        .use(LanguageDetector)
+        .use(initReactI18next)
+        .init({
+          resources: {
+            en: { translation: enTranslations },
+            bn: { translation: bnTranslations },
+          },
+          fallbackLng: 'en',
+          debug: process.env.NODE_ENV === 'development',
+          interpolation: { escapeValue: false },
+          detection: {
+            order: ['localStorage', 'navigator'],
+            caches: ['localStorage'],
+          },
+        });
+      I18nSingleton.instance = i18n;
+    }
+    return I18nSingleton.instance;
+  }
+}
 
-export default i18n; 
+// Export singleton instance
+const i18nInstance = new I18nSingleton();
+export default i18nInstance;
+
